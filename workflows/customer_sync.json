@@ -5,6 +5,7 @@
   "steps": [
     { "id": "extract", "type": "source", "table": "customers" },
     { "id": "transform", "type": "map", "drop_nulls": true },
-    { "id": "load", "type": "sink", "target": "warehouse.customers" }
+    { "id": "load", "type": "sink", "target": "warehouse.customers" },
+    { "id": "load", "type": "map", "target": "warehouse.agents" }
   ]
 }
