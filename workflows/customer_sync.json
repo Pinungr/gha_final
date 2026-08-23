@@ -1,0 +1,10 @@
+{
+  "name": "customer_sync",
+  "version": "1.0.0",
+  "schedule": "0 2 * * *",
+  "steps": [
+    { "id": "extract", "type": "source", "table": "customers" },
+    { "id": "transform", "type": "map", "drop_nulls": true },
+    { "id": "load", "type": "sink", "target": "warehouse.customers" }
+  ]
+}

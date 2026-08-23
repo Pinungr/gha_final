@@ -1,0 +1,9 @@
+{
+  "environments": {
+    "PSUP": { "source": "qa",   "target": "psup" },
+    "PROD": { "source": "psup", "target": "prod" }
+  },
+  "protected_branches": ["qa", "psup", "prod"],
+  "workflow_path_pattern": "workflows/**",
+  "workflows_list_file": "workflows_list.txt"
+}

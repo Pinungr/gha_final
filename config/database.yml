@@ -1,0 +1,9 @@
+# Sample database config.
+database:
+  version: 1.0.0
+  host: db.internal
+  port: 5432
+  name: billing
+  pool:
+    min_size: 2
+    max_size: 10

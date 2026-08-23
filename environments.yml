@@ -1,0 +1,17 @@
+# Environment definitions for the sample repository.
+# These mirror the promotion flow: qa -> psup -> prod.
+version: 1.0.0
+
+environments:
+  qa:
+    branch: qa
+    api_base_url: https://qa.billing.internal
+    debug: true
+  psup:
+    branch: psup
+    api_base_url: https://psup.billing.internal
+    debug: false
+  prod:
+    branch: prod
+    api_base_url: https://billing.internal
+    debug: false

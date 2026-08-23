@@ -1,0 +1,9 @@
+{
+  "name": "sales_export",
+  "version": "1.0.0",
+  "schedule": "30 3 * * 1",
+  "steps": [
+    { "id": "query", "type": "source", "view": "monthly_sales" },
+    { "id": "export", "type": "sink", "target": "s3://reports/sales" }
+  ]
+}

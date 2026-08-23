@@ -1,0 +1,5 @@
+# Runtime dependencies for the sample content.
+# The promotion pipeline itself needs nothing here -- it is standard library only.
+pandas==2.2.2
+pyyaml==6.0.1
+requests==2.32.3

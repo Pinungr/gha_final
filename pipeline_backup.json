@@ -1,0 +1,13 @@
+{
+  "name": "billing-pipeline",
+  "version": "1.0.0",
+  "description": "Backup copy of pipeline.json, kept for rollback.",
+  "stages": [
+    { "id": "ingest", "jobs": ["customer_sync"] },
+    { "id": "report", "jobs": ["sales_export"] }
+  ],
+  "retry": {
+    "attempts": 3,
+    "backoff_seconds": 30
+  }
+}

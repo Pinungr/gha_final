@@ -1,0 +1,10 @@
+{
+  "name": "legacy_cleanup",
+  "version": "1.0.0",
+  "deprecated": true,
+  "note": "Retired job. Use this as the DELETE|workflows/legacy_cleanup.json test case.",
+  "schedule": "0 4 * * 0",
+  "steps": [
+    { "id": "purge", "type": "sink", "target": "archive.legacy" }
+  ]
+}

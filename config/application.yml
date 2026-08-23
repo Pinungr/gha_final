@@ -1,0 +1,10 @@
+# Sample application config, used to exercise the promotion pipeline.
+# The version marker makes it obvious which branch's copy won a promotion.
+app:
+  name: billing-service
+  version: 1.0.0
+  request_timeout_seconds: 30
+
+logging:
+  level: INFO
+  format: json

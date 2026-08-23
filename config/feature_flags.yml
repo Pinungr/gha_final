@@ -1,0 +1,6 @@
+# Sample feature flags. A good candidate for a PROD promotion once PSUP is happy.
+flags:
+  version: 1.0.0
+  new_invoice_layout: false
+  bulk_refunds: false
+  loyalty_v2: false

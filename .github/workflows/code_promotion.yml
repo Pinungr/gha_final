@@ -1,0 +1,84 @@
+name: code_promotion
+
+# Controlled promotion of an explicit set of files between environments.
+# QA -> PSUP -> PROD. The source-of-truth branches are never written to; the
+# change set is assembled on a generated temp/* branch and reviewed as a Pull
+# Request into a matching release/* branch.
+#
+# Only users with write access to the repository can dispatch a workflow, which
+# is the authorization gate for this pipeline. See docs/INSTALL.md for an
+# optional environment-based approval gate on top of that.
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_target:
+        description: "Promotion target"
+        required: true
+        type: choice
+        options:
+          - PSUP
+          - PROD
+      # workflow_dispatch has no multiline input type -- 'string' renders as a
+      # single-line box, so a newline cannot be typed in the GitHub UI at all.
+      # ';' is therefore accepted alongside newlines. See docs/BRD-traceability.md
+      # deviation D11.
+      files_to_promote:
+        description: >-
+          Repository-relative paths, separated by ';' (or one per line when
+          dispatched via the API or gh). Prefix a path with DELETE| to remove it.
+        required: true
+        type: string
+      release_description:
+        description: "Optional description for the Pull Request"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# Two runs against the same target must not race for the same baseline HEAD.
+concurrency:
+  group: code-promotion-${{ inputs.deployment_target }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Promote to ${{ inputs.deployment_target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          # Full history: the promotion reads blobs from the source branch and
+          # bases the new branches on the target branch tip.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Prepare promotion and open Pull Request
+        id: promote
+        env:
+          INPUT_DEPLOYMENT_TARGET: ${{ inputs.deployment_target }}
+          INPUT_FILES_TO_PROMOTE: ${{ inputs.files_to_promote }}
+          INPUT_RELEASE_DESCRIPTION: ${{ inputs.release_description }}
+          GH_TOKEN: ${{ github.token }}
+        run: python -m promotion
+
+      - name: Report result
+        if: success()
+        run: |
+          echo "Temporary branch : ${{ steps.promote.outputs.temp_branch }}"
+          echo "Release branch   : ${{ steps.promote.outputs.release_branch }}"
+          echo "Pull Request     : ${{ steps.promote.outputs.pr_url }}"

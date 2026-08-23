@@ -1,0 +1,13 @@
+{
+  "name": "billing-pipeline",
+  "version": "1.0.0",
+  "description": "Sample pipeline definition. Not a workflows/ path, so promoting it leaves workflows_list.txt alone.",
+  "stages": [
+    { "id": "ingest", "jobs": ["customer_sync"] },
+    { "id": "report", "jobs": ["sales_export"] }
+  ],
+  "retry": {
+    "attempts": 3,
+    "backoff_seconds": 30
+  }
+}
