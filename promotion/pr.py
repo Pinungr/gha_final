@@ -33,6 +33,42 @@ class PullRequest:
     head: str
 
 
+_ACTIONS_PR_BLOCKED = "not permitted to create or approve pull requests"
+
+
+def _manual_pr_url(pr: PullRequest) -> str | None:
+    """Direct 'open a Pull Request' link, built from the runner's env."""
+    server = os.environ.get("GITHUB_SERVER_URL")
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    if not server or not repo:
+        return None
+    return f"{server}/{repo}/compare/{pr.base}...{pr.head}?expand=1"
+
+
+def _gh_remedy(pr: PullRequest, stderr: str) -> str:
+    """Section 15: name the actual cause, not a plausible-sounding one."""
+    pushed = f"Both branches were pushed, so no work is lost: {pr.head} and {pr.base}."
+    manual = _manual_pr_url(pr)
+    open_it = f" Open the Pull Request here: {manual}" if manual else (
+        f" Open the Pull Request manually from {pr.head} into {pr.base}."
+    )
+
+    if _ACTIONS_PR_BLOCKED in stderr:
+        # The workflow already grants 'pull-requests: write'. This failure is a
+        # repository/organisation setting that overrides the token, so pointing
+        # at the permission block would send the reader down the wrong path.
+        return (
+            f"{pushed} GitHub Actions is blocked from opening Pull Requests by a "
+            f"repository setting, not by the token. Enable Settings -> Actions -> "
+            f"General -> Workflow permissions -> 'Allow GitHub Actions to create "
+            f"and approve pull requests', then re-run.{open_it}"
+        )
+    return (
+        f"{pushed} Check the token's 'pull-requests: write' permission and that "
+        f"Actions may open Pull Requests in this repository.{open_it}"
+    )
+
+
 @dataclass
 class GhCliBackend:
     """Creates the PR with the ``gh`` CLI, preinstalled on GitHub runners."""
@@ -65,18 +101,15 @@ class GhCliBackend:
             errors="replace",
         )
         if proc.returncode != 0:
+            stderr = proc.stderr or ""
             raise PromotionError(
                 E_GH,
                 f"Creating the Pull Request failed (gh exit code "
                 f"{proc.returncode}).",
                 details=[
-                    line
-                    for line in (proc.stderr or "").splitlines()
-                    if line.strip()
+                    line for line in stderr.splitlines() if line.strip()
                 ],
-                remedy=f"The branches {pr.head} and {pr.base} were pushed. Check "
-                f"the token's 'pull-requests: write' permission, then open the "
-                f"Pull Request manually if needed.",
+                remedy=_gh_remedy(pr, stderr),
             )
         return (proc.stdout or "").strip().splitlines()[-1] if proc.stdout else ""
 
