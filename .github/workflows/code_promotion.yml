@@ -82,3 +82,6 @@ jobs:
           echo "Temporary branch : ${{ steps.promote.outputs.temp_branch }}"
           echo "Release branch   : ${{ steps.promote.outputs.release_branch }}"
           echo "Pull Request     : ${{ steps.promote.outputs.pr_url }}"
+
+# Registration touch: GitHub parses .github/workflows/* on push. This comment
+# exists only to make a push contain a change to this file.
