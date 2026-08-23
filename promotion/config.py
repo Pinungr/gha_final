@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from datetime import timedelta, timezone
 from pathlib import Path
 
 from .errors import E_BAD_CONFIG, E_BAD_TARGET, E_NO_TARGET, PromotionError
@@ -12,6 +13,12 @@ from .errors import E_BAD_CONFIG, E_BAD_TARGET, E_NO_TARGET, PromotionError
 CONFIG_FILENAME = "promotion.config.json"
 
 _BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+
+# A fixed offset rather than a named zone: zoneinfo needs system tzdata, which
+# Windows does not ship, so a named zone would break local dry-runs and pull in
+# a dependency this package deliberately avoids. Zones observing DST therefore
+# need this value changed twice a year; India (+05:30) does not observe DST.
+_OFFSET_RE = re.compile(r"^([+-])(\d{2}):(\d{2})$")
 
 
 def _glob_to_regex(pattern: str) -> re.Pattern[str]:
@@ -64,7 +71,13 @@ class Config:
     protected_branches: tuple[str, ...]
     workflow_path_pattern: str
     workflows_list_file: str
+    timestamp_offset: timedelta
     _workflow_re: re.Pattern[str]
+
+    @property
+    def timestamp_tz(self) -> timezone:
+        """Timezone the generated branch names are stamped in (section 16)."""
+        return timezone(self.timestamp_offset)
 
     def resolve(self, target_name: str | None) -> Environment:
         """Map a ``deployment_target`` input to its promotion route."""
@@ -109,6 +122,29 @@ def _require_branch(raw: object, field: str) -> str:
             f"{CONFIG_FILENAME}: {field!r} is not a valid branch name: {value!r}.",
         )
     return value
+
+
+def _require_offset(raw: object, field: str) -> timedelta:
+    """Parse a ``+HH:MM`` / ``-HH:MM`` UTC offset. Absent means UTC."""
+    if raw is None:
+        return timedelta(0)
+    value = _require_str(raw, field)
+    match = _OFFSET_RE.match(value)
+    if not match:
+        raise PromotionError(
+            E_BAD_CONFIG,
+            f"{CONFIG_FILENAME}: {field!r} must look like '+05:30' or '-08:00', "
+            f"not {value!r}.",
+        )
+    sign, hours, minutes = match.groups()
+    offset = timedelta(hours=int(hours), minutes=int(minutes))
+    if offset > timedelta(hours=14):
+        raise PromotionError(
+            E_BAD_CONFIG,
+            f"{CONFIG_FILENAME}: {field!r} is outside the valid UTC offset "
+            f"range (-12:00 to +14:00): {value!r}.",
+        )
+    return -offset if sign == "-" else offset
 
 
 def load(repo_root: Path, filename: str = CONFIG_FILENAME) -> Config:
@@ -178,5 +214,8 @@ def load(repo_root: Path, filename: str = CONFIG_FILENAME) -> Config:
         protected_branches=protected,
         workflow_path_pattern=pattern,
         workflows_list_file=list_file,
+        timestamp_offset=_require_offset(
+            raw.get("timestamp_utc_offset"), "timestamp_utc_offset"
+        ),
         _workflow_re=_glob_to_regex(pattern),
     )

@@ -53,10 +53,17 @@ class PromotionResult:
     dry_run: bool = False
 
 
-def make_timestamp(now: datetime | None = None) -> str:
-    """Execution identifier, ``DD_MM_YYYY_HH_MM_SS`` (BRD sections 5 and 16)."""
-    moment = now or datetime.now(timezone.utc)
-    return moment.strftime(TIMESTAMP_FORMAT)
+def make_timestamp(
+    now: datetime | None = None, tz: timezone = timezone.utc
+) -> str:
+    """Execution identifier, ``DD_MM_YYYY_HH_MM_SS`` (BRD sections 5 and 16).
+
+    Stamped in ``tz`` so branch names read against the wall clock of whoever
+    dispatched the run. Runners are UTC, so without this the name trails local
+    time by the UTC offset and looks stale.
+    """
+    moment = now or datetime.now(tz)
+    return moment.astimezone(tz).strftime(TIMESTAMP_FORMAT)
 
 
 def _preflight_paths(
@@ -194,7 +201,7 @@ def promote(
     log(f"Baseline: {env.target} @ {base_sha}")
 
     # 6. One timestamp for both generated branches (sections 5 and 16).
-    timestamp = make_timestamp(now)
+    timestamp = make_timestamp(now, config.timestamp_tz)
     temp_branch = f"temp/{timestamp}_{env.slug}"
     release_branch = f"release/{timestamp}_{env.slug}"
     log(f"Branches: {temp_branch} and {release_branch}")
