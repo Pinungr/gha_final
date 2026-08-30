@@ -1,9 +1,14 @@
 {
   "environments": {
-    "PSUP": { "source": "master", "target": "psup" },
-    "PROD": { "source": "psup", "target": "prod" }
+    "MASTER": {
+      "source": "dev_collaboration",
+      "target": "master",
+      "create_release_branch": false
+    },
+    "PSUP": { "source": "master", "target": "psup", "create_release_branch": true },
+    "PROD": { "source": "psup", "target": "prod", "create_release_branch": true }
   },
-  "protected_branches": ["master", "psup", "prod"],
+  "protected_branches": ["dev_collaboration", "master", "psup", "prod"],
   "workflow_path_pattern": "workflows/**",
   "workflows_list_file": "workflows_list.txt",
   "timestamp_utc_offset": "+05:30"

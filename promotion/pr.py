@@ -138,7 +138,7 @@ def render_body(
     base_sha: str,
     timestamp: str,
     staging_branch: str,
-    release_branch: str,
+    release_branch: str | None,
     changes: list[tuple[str, str]],
     requested_promotes: list[str],
     requested_deletes: list[str],
@@ -161,9 +161,12 @@ def render_body(
         f"| Baseline commit | `{base_sha}` |",
         f"| Execution timestamp | `{timestamp}` |",
         f"| Temporary branch | `{staging_branch}` |",
-        f"| Release branch | `{release_branch}` |",
         f"| Inventory | `promotion.txt` |",
     ]
+    if release_branch is None:
+        lines.append(f"| PR target | `{target_branch}` |")
+    else:
+        lines.append(f"| Release branch | `{release_branch}` |")
     if run_url:
         lines.append(f"| Workflow run | {run_url} |")
     lines.append("")
@@ -203,11 +206,12 @@ def render_body(
     if release_description and release_description.strip():
         lines += ["## Release description", "", release_description.strip(), ""]
 
+    destination = release_branch or target_branch
     lines += [
         "---",
         "",
         f"The source-of-truth branches (`{source_branch}`, `{target_branch}`) were "
         "not modified by the automation. Squash and merge this Pull Request once "
-        f"the configured approvals are satisfied to publish the change to `{release_branch}`.",
+        f"the configured approvals are satisfied to publish the change to `{destination}`.",
     ]
     return "\n".join(lines)

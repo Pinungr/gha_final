@@ -45,7 +45,7 @@ class PromotionResult:
     source_branch: str
     target_branch: str
     staging_branch: str
-    release_branch: str
+    release_branch: str | None
     base_sha: str
     timestamp: str
     commit_sha: str | None
@@ -218,18 +218,25 @@ def promote(
         f"({len(inv.promotes)} to promote, {len(inv.deletes)} to delete)"
     )
 
-    # 6. Name the generated release branch from one audit timestamp.
+    # 6. Select the PR base strategy. MASTER routes directly to its configured
+    # target; PSUP and PROD retain the generated release-branch workflow.
     timestamp = make_timestamp(now, cfg.timestamp_tz)
-    release_branch = f"release/{timestamp}_{env.slug}"
-    if release_branch in heads:
-        raise PromotionError(
-            E_BRANCH_EXISTS,
-            f"The generated release branch '{release_branch}' already exists.",
-            remedy="Re-run the workflow; a fresh release branch name will be "
-            "generated from the new execution timestamp.",
-        )
-    guards.assert_push_allowed(release_branch, cfg)
-    log(f"Release branch: {release_branch}")
+    release_branch: str | None = None
+    pr_base = env.target
+    if env.create_release_branch:
+        release_branch = f"release/{timestamp}_{env.slug}"
+        if release_branch in heads:
+            raise PromotionError(
+                E_BRANCH_EXISTS,
+                f"The generated release branch '{release_branch}' already exists.",
+                remedy="Re-run the workflow; a fresh release branch name will be "
+                "generated from the new execution timestamp.",
+            )
+        guards.assert_push_allowed(release_branch, cfg)
+        pr_base = release_branch
+        log(f"Release branch: {release_branch}")
+    else:
+        log(f"PR target: {pr_base} (no release branch for {env.name})")
 
     # 7. Repository-level validation, still before any write.
     _preflight_paths(git, inv, env, staging_sha, staging_branch)
@@ -326,7 +333,7 @@ def promote(
             release_description=release_description,
             run_url=run_url,
         ),
-        base=release_branch,
+        base=pr_base,
         head=staging_branch,
     )
 
@@ -348,11 +355,12 @@ def promote(
         log("Dry run: stopping before any push.")
         return PromotionResult(**result_kwargs, pr_url="", dry_run=True)
 
-    # 14. Publish the temporary branch and a new release branch, then open the PR.
+    # 14. Publish the temporary branch and, where configured, its release base.
     git.push_existing_branch(staging_branch)
     log(f"Pushed {staging_branch}")
-    git.push_new_branch(base_sha, release_branch)
-    log(f"Created {release_branch} from {env.target}")
+    if release_branch is not None:
+        git.push_new_branch(base_sha, release_branch)
+        log(f"Created {release_branch} from {env.target}")
 
     pr_url = backend.create(pull)
     log(f"Pull Request: {pr_url}")

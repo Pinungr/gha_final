@@ -13,6 +13,8 @@ from promotion.errors import (
     E_DUP_PATH,
     E_MISSING_SOURCE,
     E_PROMOTION_FILE_MISSING,
+    E_PROTECTED_BRANCH,
+    E_UNEXPECTED_CHANGE,
     PromotionError,
 )
 from promotion.gitops import Git
@@ -58,9 +60,11 @@ def _make_repository(
     tmp_path: Path,
     promotion_text: str | None,
     *,
+    deployment_target: str = "PSUP",
     prepopulate_temporary_branch: bool = False,
+    unexpected_temporary_file: bool = False,
 ) -> tuple[Path, Path]:
-    """Create master -> P2 plus a user-created temporary branch and runner clone."""
+    """Create all three routes plus a temporary branch for ``deployment_target``."""
     remote = tmp_path / "remote.git"
     author = tmp_path / "author"
     runner = tmp_path / "runner"
@@ -74,26 +78,44 @@ def _make_repository(
         "promotion.config.json",
         json.dumps(
             {
-                "environments": {"P2": {"source": "master", "target": "P2"}},
-                "protected_branches": ["master", "P2"],
+                "environments": {
+                    "MASTER": {
+                        "source": "dev_collaboration",
+                        "target": "master",
+                        "create_release_branch": False,
+                    },
+                    "PSUP": {
+                        "source": "master",
+                        "target": "psup",
+                        "create_release_branch": True,
+                    },
+                    "PROD": {
+                        "source": "psup",
+                        "target": "prod",
+                        "create_release_branch": True,
+                    },
+                },
+                "protected_branches": ["dev_collaboration", "master", "psup", "prod"],
                 "workflow_path_pattern": "workflows/**",
                 "workflows_list_file": "workflows_list.txt",
             }
         ),
     )
-    _write(author, "file1", "P2 version\n")
-    _write(author, "file2", "P2 version\n")
-    _write(author, "file3", "P2 version\n")
+    _write(author, "file1", "base version\n")
+    _write(author, "file2", "base version\n")
+    _write(author, "file3", "base version\n")
     _write(author, "workflows/old.json", '{"workflow": "old"}\n')
     _write(author, "workflows_list.txt", "workflows/old.json\n")
     _git(author, "add", ".")
-    _git(author, "commit", "-m", "Base P2 content")
+    _git(author, "commit", "-m", "Base promotion content")
     _git(author, "branch", "-M", "master")
     _git(author, "remote", "add", "origin", str(remote))
     _git(author, "push", "-u", "origin", "master")
 
-    _git(author, "checkout", "-b", "P2")
-    _git(author, "push", "-u", "origin", "P2")
+    _git(author, "checkout", "-b", "psup")
+    _git(author, "push", "-u", "origin", "psup")
+    _git(author, "checkout", "-b", "prod")
+    _git(author, "push", "-u", "origin", "prod")
 
     _git(author, "checkout", "master")
     _write(author, "file1", "master version\n")
@@ -104,14 +126,34 @@ def _make_repository(
     _git(author, "commit", "-m", "Master promotion content")
     _git(author, "push")
 
-    _git(author, "checkout", "-b", "reltest_30_08_2026", "P2")
+    _git(author, "checkout", "psup")
+    _write(author, "file1", "psup version\n")
+    _write(author, "workflows/psup.json", '{"workflow": "psup"}\n')
+    _git(author, "add", ".")
+    _git(author, "commit", "-m", "PSUP promotion content")
+    _git(author, "push")
+
+    _git(author, "checkout", "-b", "dev_collaboration", "master")
+    _write(author, "file1", "dev version\n")
+    _write(author, "file2", "dev version\n")
+    _write(author, "file3", "dev version\n")
+    _write(author, "workflows/dev.json", '{"workflow": "dev"}\n')
+    _git(author, "add", ".")
+    _git(author, "commit", "-m", "Development collaboration content")
+    _git(author, "push", "-u", "origin", "dev_collaboration")
+
+    targets = {"MASTER": "master", "PSUP": "psup", "PROD": "prod"}
+    sources = {"MASTER": "dev", "PSUP": "master", "PROD": "psup"}
+    _git(author, "checkout", "-b", "reltest_30_08_2026", targets[deployment_target])
     if promotion_text is not None:
         _write(author, "promotion.txt", promotion_text)
     if prepopulate_temporary_branch:
-        _write(author, "file1", "master version\n")
-        _write(author, "file2", "master version\n")
-        _write(author, "file3", "master version\n")
-    if promotion_text is not None or prepopulate_temporary_branch:
+        _write(author, "file1", f"{sources[deployment_target]} version\n")
+        _write(author, "file2", f"{sources[deployment_target]} version\n")
+        _write(author, "file3", f"{sources[deployment_target]} version\n")
+    if unexpected_temporary_file:
+        _write(author, "unexpected.txt", "not approved\n")
+    if promotion_text is not None or prepopulate_temporary_branch or unexpected_temporary_file:
         _git(author, "add", ".")
         _git(author, "commit", "-m", "Prepare temporary promotion branch")
     _git(author, "push", "-u", "origin", "reltest_30_08_2026")
@@ -122,11 +164,13 @@ def _make_repository(
     return remote, runner
 
 
-def _run_promotion(runner: Path) -> tuple[object, RecordingBackend]:
+def _run_promotion(
+    runner: Path, deployment_target: str = "PSUP"
+) -> tuple[object, RecordingBackend]:
     backend = RecordingBackend()
     result = promote(
         repo_root=runner,
-        deployment_target="P2",
+        deployment_target=deployment_target,
         staging_branch="reltest_30_08_2026",
         git=Git(runner),
         pr_backend=backend,
@@ -142,20 +186,22 @@ def test_valid_promotion_txt_updates_the_existing_staging_branch_and_pr(tmp_path
 
     assert result.staging_branch == "reltest_30_08_2026"
     assert result.source_branch == "master"
-    assert result.release_branch == "release/30_08_2026_10_20_30_p2"
+    assert result.release_branch == "release/30_08_2026_10_20_30_psup"
     assert result.pr is not None
     assert result.pr.head == "reltest_30_08_2026"
-    assert result.pr.base == "release/30_08_2026_10_20_30_p2"
+    assert result.pr.base == "release/30_08_2026_10_20_30_psup"
     assert len(backend.created) == 1
     assert _remote_text(remote, result.staging_branch, "file1") == "master version"
     assert _remote_text(remote, result.staging_branch, "file2") == "master version"
     assert _remote_text(remote, result.staging_branch, "file3") == "master version"
-    assert _remote_text(remote, result.release_branch, "file1") == "P2 version"
+    assert _remote_text(remote, result.release_branch, "file1") == "psup version"
     assert _remote_branches(remote) == {
-        "P2",
+        "dev_collaboration",
         "master",
+        "prod",
+        "psup",
         "reltest_30_08_2026",
-        "release/30_08_2026_10_20_30_p2",
+        "release/30_08_2026_10_20_30_psup",
     }
 
 
@@ -173,9 +219,105 @@ def test_prepopulated_temporary_branch_still_creates_release_pr(tmp_path: Path) 
     assert _remote_sha(remote, result.staging_branch) == before
     assert result.pr is not None
     assert result.pr.head == "reltest_30_08_2026"
-    assert result.pr.base == "release/30_08_2026_10_20_30_p2"
+    assert result.pr.base == "release/30_08_2026_10_20_30_psup"
     assert len(backend.created) == 1
     assert result.release_branch in _remote_branches(remote)
+
+
+def test_master_promotes_from_dev_collaboration_directly_to_master(tmp_path: Path) -> None:
+    remote, runner = _make_repository(
+        tmp_path, "file1\nfile2\nfile3\n", deployment_target="MASTER"
+    )
+
+    result, backend = _run_promotion(runner, "MASTER")
+
+    assert result.source_branch == "dev_collaboration"
+    assert result.target_branch == "master"
+    assert result.release_branch is None
+    assert result.pr is not None
+    assert result.pr.head == "reltest_30_08_2026"
+    assert result.pr.base == "master"
+    assert len(backend.created) == 1
+    assert _remote_text(remote, result.staging_branch, "file1") == "dev version"
+    assert not any(branch.startswith("release/") for branch in _remote_branches(remote))
+    assert "Release branch" not in result.pr.body
+
+
+def test_master_workflow_promotion_rebuilds_workflows_list(tmp_path: Path) -> None:
+    remote, runner = _make_repository(
+        tmp_path, "workflows/dev.json\n", deployment_target="MASTER"
+    )
+
+    result, _ = _run_promotion(runner, "MASTER")
+
+    assert _remote_text(remote, result.staging_branch, "workflows/dev.json") == '{"workflow": "dev"}'
+    assert _remote_text(remote, result.staging_branch, "workflows_list.txt") == "workflows/dev.json"
+    assert result.release_branch is None
+
+
+def test_master_delete_is_prepared_on_temporary_branch_without_release(tmp_path: Path) -> None:
+    remote, runner = _make_repository(
+        tmp_path, "DELETE|workflows/old.json\n", deployment_target="MASTER"
+    )
+
+    result, _ = _run_promotion(runner, "MASTER")
+
+    missing = subprocess.run(
+        ["git", "show", f"{result.staging_branch}:workflows/old.json"],
+        cwd=remote,
+        capture_output=True,
+        text=True,
+    )
+    assert missing.returncode != 0
+    assert result.pr is not None and result.pr.base == "master"
+    assert result.release_branch is None
+
+
+def test_master_rejects_unexpected_temporary_branch_changes(tmp_path: Path) -> None:
+    remote, runner = _make_repository(
+        tmp_path,
+        "file1\n",
+        deployment_target="MASTER",
+        unexpected_temporary_file=True,
+    )
+    before = _remote_sha(remote, "reltest_30_08_2026")
+
+    with pytest.raises(PromotionError) as caught:
+        _run_promotion(runner, "MASTER")
+
+    assert caught.value.code == E_UNEXPECTED_CHANGE
+    assert _remote_sha(remote, "reltest_30_08_2026") == before
+    assert not any(branch.startswith("release/") for branch in _remote_branches(remote))
+
+
+def test_master_cannot_be_used_as_temporary_branch(tmp_path: Path) -> None:
+    _, runner = _make_repository(tmp_path, "file1\n", deployment_target="MASTER")
+
+    with pytest.raises(PromotionError) as caught:
+        promote(
+            repo_root=runner,
+            deployment_target="MASTER",
+            staging_branch="master",
+            git=Git(runner),
+            pr_backend=RecordingBackend(),
+        )
+
+    assert caught.value.code == E_PROTECTED_BRANCH
+
+
+def test_prod_retains_the_generated_release_branch_path(tmp_path: Path) -> None:
+    remote, runner = _make_repository(
+        tmp_path, "file1\n", deployment_target="PROD"
+    )
+
+    result, _ = _run_promotion(runner, "PROD")
+
+    assert result.source_branch == "psup"
+    assert result.target_branch == "prod"
+    assert result.release_branch == "release/30_08_2026_10_20_30_prod"
+    assert result.pr is not None
+    assert result.pr.base == "release/30_08_2026_10_20_30_prod"
+    assert _remote_text(remote, result.staging_branch, "file1") == "psup version"
 
 
 def test_missing_promotion_txt_does_not_commit_push_or_create_a_pr(tmp_path: Path) -> None:
@@ -186,7 +328,7 @@ def test_missing_promotion_txt_does_not_commit_push_or_create_a_pr(tmp_path: Pat
     with pytest.raises(PromotionError) as caught:
         promote(
             repo_root=runner,
-            deployment_target="P2",
+            deployment_target="PSUP",
             staging_branch="reltest_30_08_2026",
             git=Git(runner),
             pr_backend=backend,
@@ -198,15 +340,17 @@ def test_missing_promotion_txt_does_not_commit_push_or_create_a_pr(tmp_path: Pat
     assert backend.created == []
 
 
-def test_missing_source_file_fails_before_the_staging_branch_is_modified(tmp_path: Path) -> None:
-    remote, runner = _make_repository(tmp_path, "file1\ndoes/not/exist.txt\n")
+def test_master_missing_source_file_fails_before_temporary_branch_is_modified(tmp_path: Path) -> None:
+    remote, runner = _make_repository(
+        tmp_path, "file1\ndoes/not/exist.txt\n", deployment_target="MASTER"
+    )
     before = _remote_sha(remote, "reltest_30_08_2026")
     backend = RecordingBackend()
 
     with pytest.raises(PromotionError) as caught:
         promote(
             repo_root=runner,
-            deployment_target="P2",
+            deployment_target="MASTER",
             staging_branch="reltest_30_08_2026",
             git=Git(runner),
             pr_backend=backend,

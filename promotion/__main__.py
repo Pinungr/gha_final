@@ -49,7 +49,7 @@ def _set_outputs(result: PromotionResult) -> None:
         ("timestamp", result.timestamp),
         ("base_sha", result.base_sha),
         ("temporary_branch", result.staging_branch),
-        ("release_branch", result.release_branch),
+        ("release_branch", result.release_branch or "Not Applicable"),
         ("commit_sha", result.commit_sha or ""),
         ("pr_url", result.pr_url),
     ):
@@ -62,7 +62,10 @@ def _summarise_success(result: PromotionResult) -> None:
         ("Source branch", f"`{result.source_branch}`"),
         ("Target branch", f"`{result.target_branch}`"),
         ("Temporary branch", f"`{result.staging_branch}`"),
-        ("Release branch", f"`{result.release_branch}`"),
+        (
+            "Release branch",
+            f"`{result.release_branch}`" if result.release_branch else "Not Applicable",
+        ),
         ("Release baseline commit", f"`{result.base_sha}`"),
         ("Execution timestamp", f"`{result.timestamp}`"),
         ("Inventory", "`promotion.txt`"),

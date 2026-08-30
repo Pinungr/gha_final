@@ -17,6 +17,7 @@ on:
         required: true
         type: choice
         options:
+          - MASTER
           - PSUP
           - PROD
       staging_branch:

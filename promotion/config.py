@@ -59,11 +59,12 @@ def _glob_to_regex(pattern: str) -> re.Pattern[str]:
 
 @dataclass(frozen=True)
 class Environment:
-    """One promotion route: read from ``source``, base the change on ``target``."""
+    """One promotion route and its Pull Request base strategy."""
 
     name: str
     source: str
     target: str
+    create_release_branch: bool
 
     @property
     def slug(self) -> str:
@@ -210,7 +211,19 @@ def load(repo_root: Path, filename: str = CONFIG_FILENAME) -> Config:
                 f"{filename}: environments.{name} has the same source and "
                 f"target branch ({source!r}).",
             )
-        environments[label] = Environment(name=label, source=source, target=target)
+        create_release_branch = spec.get("create_release_branch", True)
+        if not isinstance(create_release_branch, bool):
+            raise PromotionError(
+                E_BAD_CONFIG,
+                f"{filename}: environments.{name}.create_release_branch must be "
+                "a boolean when supplied.",
+            )
+        environments[label] = Environment(
+            name=label,
+            source=source,
+            target=target,
+            create_release_branch=create_release_branch,
+        )
 
     raw_protected = raw.get("protected_branches", [])
     if not isinstance(raw_protected, list):
