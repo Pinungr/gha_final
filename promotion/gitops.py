@@ -140,7 +140,15 @@ class Git:
 
     def staged_changes(self) -> list[tuple[str, str]]:
         """``(status, path)`` for everything staged relative to HEAD."""
-        raw = self.out("diff", "--cached", "--name-status", "-z", "HEAD")
+        return self._name_status("diff", "--cached", "--name-status", "-z", "HEAD")
+
+    def changes_between(self, base: str, head: str = "HEAD") -> list[tuple[str, str]]:
+        """``(status, path)`` for the change set from ``base`` to ``head``."""
+        return self._name_status("diff", "--name-status", "-z", base, head)
+
+    def _name_status(self, *args: str) -> list[tuple[str, str]]:
+        """Parse NUL-delimited output from ``git diff --name-status``."""
+        raw = self.out(*args)
         if not raw:
             return []
         fields = [f for f in raw.split("\0") if f]
@@ -186,5 +194,14 @@ class Git:
     # -- remote mutation ---------------------------------------------------
 
     def push_existing_branch(self, branch: str) -> None:
-        """Push the checked-out staging branch without force-overwriting it."""
+        """Push the checked-out temporary branch without force-overwriting it."""
         self.run("push", self.remote, f"HEAD:refs/heads/{branch}")
+
+    def push_new_branch(self, sha: str, branch: str) -> None:
+        """Create ``branch`` at ``sha``, failing atomically if it already exists."""
+        self.run(
+            "push",
+            f"--force-with-lease=refs/heads/{branch}:",
+            self.remote,
+            f"{sha}:refs/heads/{branch}",
+        )

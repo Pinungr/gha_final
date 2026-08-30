@@ -2,7 +2,7 @@
 
 Inputs arrive as ``INPUT_*`` environment variables (how ``workflow_dispatch``
 inputs are exposed) and can be overridden by flags for local runs. The selected
-staging branch supplies the inventory through its root ``promotion.txt`` file.
+temporary branch supplies the inventory through its root ``promotion.txt`` file.
 Failures are rendered both as GitHub annotations and into the job summary.
 """
 
@@ -48,7 +48,8 @@ def _set_outputs(result: PromotionResult) -> None:
     for key, value in (
         ("timestamp", result.timestamp),
         ("base_sha", result.base_sha),
-        ("staging_branch", result.staging_branch),
+        ("temporary_branch", result.staging_branch),
+        ("release_branch", result.release_branch),
         ("commit_sha", result.commit_sha or ""),
         ("pr_url", result.pr_url),
     ):
@@ -60,8 +61,9 @@ def _summarise_success(result: PromotionResult) -> None:
         ("Environment", result.environment),
         ("Source branch", f"`{result.source_branch}`"),
         ("Target branch", f"`{result.target_branch}`"),
-        ("Staging branch", f"`{result.staging_branch}`"),
-        ("Baseline commit", f"`{result.base_sha}`"),
+        ("Temporary branch", f"`{result.staging_branch}`"),
+        ("Release branch", f"`{result.release_branch}`"),
+        ("Release baseline commit", f"`{result.base_sha}`"),
         ("Execution timestamp", f"`{result.timestamp}`"),
         ("Inventory", "`promotion.txt`"),
     ]
@@ -111,7 +113,7 @@ def _summarise_failure(error: PromotionError) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m promotion",
-        description="Promote the inventory in a staging branch and open a Pull Request.",
+        description="Promote from a temporary branch and open a release Pull Request.",
     )
     parser.add_argument("--target", help="Deployment target, e.g. PSUP or PROD.")
     parser.add_argument(

@@ -1,8 +1,9 @@
 """Pull Request creation (BRD sections 13 and 17).
 
 The PR is the review and approval record, so its body carries everything needed
-to audit the promotion later: the source, target and staging branches, the baseline commit, the
-execution timestamp, and every requested path with its resulting change.
+to audit the promotion later: the source, target, temporary and release
+branches, the baseline commit, the execution timestamp, and every requested
+path with its resulting change.
 
 Creation is isolated behind :class:`PrBackend` so the orchestrator can be tested
 end-to-end against local git repositories without the ``gh`` CLI or network.
@@ -137,6 +138,7 @@ def render_body(
     base_sha: str,
     timestamp: str,
     staging_branch: str,
+    release_branch: str,
     changes: list[tuple[str, str]],
     requested_promotes: list[str],
     requested_deletes: list[str],
@@ -158,7 +160,8 @@ def render_body(
         f"| Target branch | `{target_branch}` |",
         f"| Baseline commit | `{base_sha}` |",
         f"| Execution timestamp | `{timestamp}` |",
-        f"| Staging branch | `{staging_branch}` |",
+        f"| Temporary branch | `{staging_branch}` |",
+        f"| Release branch | `{release_branch}` |",
         f"| Inventory | `promotion.txt` |",
     ]
     if run_url:
@@ -205,6 +208,6 @@ def render_body(
         "",
         f"The source-of-truth branches (`{source_branch}`, `{target_branch}`) were "
         "not modified by the automation. Squash and merge this Pull Request once "
-        f"the configured approvals are satisfied to publish the change to `{target_branch}`.",
+        f"the configured approvals are satisfied to publish the change to `{release_branch}`.",
     ]
     return "\n".join(lines)

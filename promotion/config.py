@@ -65,6 +65,11 @@ class Environment:
     source: str
     target: str
 
+    @property
+    def slug(self) -> str:
+        """Lowercase suffix used in generated release branch names."""
+        return self.name.lower()
+
 
 @dataclass(frozen=True)
 class Config:

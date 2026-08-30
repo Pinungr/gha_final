@@ -1,9 +1,9 @@
 """Promotion orchestration -- the BRD section 6 end-to-end sequence.
 
-The user creates the staging branch before dispatch. The promotion inventory is
-read from that branch, requested files are read from ``origin/<source>``, and
-only the supplied staging branch may be updated. Remote writes are deferred
-until every validation and the change-set guard have passed.
+The user creates the temporary branch before dispatch. The promotion inventory
+is read from that branch, requested files are read from ``origin/<source>``,
+and the supplied branch is updated. A generated release branch is created from
+the configured target and becomes the Pull Request base.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from . import guards, inventory as inventory_mod, workflows_list
 from .config import Config, Environment
 from .errors import (
     E_BAD_DELETE,
+    E_BRANCH_EXISTS,
     E_BRANCH_MISSING,
     E_GIT,
     E_MISSING_SOURCE,
@@ -44,6 +45,7 @@ class PromotionResult:
     source_branch: str
     target_branch: str
     staging_branch: str
+    release_branch: str
     base_sha: str
     timestamp: str
     commit_sha: str | None
@@ -113,12 +115,12 @@ def _preflight_paths(
         if kind is None:
             bad_deletes.append(
                 f"{entry.location}: {entry.path} (not present on "
-                f"staging branch '{staging_branch}')"
+                f"temporary branch '{staging_branch}')"
             )
         elif kind != "blob":
             bad_deletes.append(
                 f"{entry.location}: {entry.path} (is a {kind} on "
-                f"staging branch '{staging_branch}')"
+                f"temporary branch '{staging_branch}')"
             )
 
     if bad_deletes:
@@ -127,7 +129,7 @@ def _preflight_paths(
             f"{len(bad_deletes)} DELETE path(s) cannot be deleted.",
             details=bad_deletes,
             remedy="A DELETE path must be an existing file on the supplied "
-            f"staging branch '{staging_branch}'.",
+            f"temporary branch '{staging_branch}'.",
         )
 
 
@@ -157,8 +159,8 @@ def promote(
     if not staging_branch or not staging_branch.strip():
         raise PromotionError(
             E_NO_STAGING_BRANCH,
-            "No staging branch was supplied.",
-            remedy="Re-run the workflow and select the user-created staging branch "
+            "No temporary branch was supplied.",
+            remedy="Re-run the workflow and select the user-created temporary branch "
             "that contains promotion.txt.",
         )
     staging_branch = config_mod.validate_branch_name(
@@ -177,7 +179,7 @@ def promote(
             details=dirty.splitlines(),
         )
 
-    # 3. The configured route and supplied staging branch must exist remotely.
+    # 3. The configured route and supplied temporary branch must exist remotely.
     heads = git.remote_heads()
     absent = [b for b in (env.source, env.target, staging_branch) if b not in heads]
     if absent:
@@ -186,24 +188,26 @@ def promote(
             f"Required branch(es) do not exist on the remote: "
             f"{', '.join(absent)}.",
             details=[
-                f"{b} ({'staging branch input' if b == staging_branch else f'environments.{env.name}'})"
+                f"{b} ({'temporary branch input' if b == staging_branch else f'environments.{env.name}'})"
                 for b in absent
             ],
-            remedy="Create the user-supplied staging branch or correct "
+            remedy="Create the user-supplied temporary branch or correct "
             f"{config_mod.CONFIG_FILENAME}.",
         )
 
-    # 4. The supplied branch is the only branch this run may push.
+    # 4. Capture the release baseline and validate the supplied temporary branch.
     guards.assert_push_allowed(staging_branch, cfg)
     staging_rev = f"refs/remotes/{git.remote}/{staging_branch}"
-    base_sha = git.remote_branch_sha(staging_branch)
-    log(f"Staging baseline: {staging_branch} @ {base_sha}")
+    staging_sha = git.remote_branch_sha(staging_branch)
+    base_sha = git.remote_branch_sha(env.target)
+    log(f"Temporary branch: {staging_branch} @ {staging_sha}")
+    log(f"Release baseline: {env.target} @ {base_sha}")
 
     # 5. Read and validate the root inventory before changing the checkout.
     if git.object_type(staging_rev, PROMOTION_FILENAME) != "blob":
         raise PromotionError(
             E_PROMOTION_FILE_MISSING,
-            f"{PROMOTION_FILENAME} was not found in staging branch '{staging_branch}'.",
+            f"{PROMOTION_FILENAME} was not found in temporary branch '{staging_branch}'.",
             remedy=f"Add {PROMOTION_FILENAME} at the repository root of "
             f"'{staging_branch}', commit it, and re-run.",
         )
@@ -214,16 +218,26 @@ def promote(
         f"({len(inv.promotes)} to promote, {len(inv.deletes)} to delete)"
     )
 
-    # 6. Timestamp is retained for auditing and PR titles only.
+    # 6. Name the generated release branch from one audit timestamp.
     timestamp = make_timestamp(now, cfg.timestamp_tz)
+    release_branch = f"release/{timestamp}_{env.slug}"
+    if release_branch in heads:
+        raise PromotionError(
+            E_BRANCH_EXISTS,
+            f"The generated release branch '{release_branch}' already exists.",
+            remedy="Re-run the workflow; a fresh release branch name will be "
+            "generated from the new execution timestamp.",
+        )
+    guards.assert_push_allowed(release_branch, cfg)
+    log(f"Release branch: {release_branch}")
 
     # 7. Repository-level validation, still before any write.
-    _preflight_paths(git, inv, env, base_sha, staging_branch)
+    _preflight_paths(git, inv, env, staging_sha, staging_branch)
 
-    # 8. Check out the existing staging branch at the fetched remote commit.
-    git.checkout_existing_branch(staging_branch, base_sha)
+    # 8. Check out the existing temporary branch at the fetched remote commit.
+    git.checkout_existing_branch(staging_branch, staging_sha)
 
-    # 9. Apply source files to the same staging branch.
+    # 9. Apply source files to the same temporary branch.
     if inv.promote_paths:
         git.checkout_paths_from(f"refs/remotes/{git.remote}/{env.source}", inv.promote_paths)
         log(f"Applied {len(inv.promote_paths)} file(s) from {env.source}")
@@ -251,25 +265,48 @@ def promote(
         log(f"{cfg.workflows_list_file}: rebuilt with {len(list_entries)} entry(ies)")
 
     # 11. Nothing outside the requested set may have changed (sections 6, 20).
-    changes = git.staged_changes()
+    staged_changes = git.staged_changes()
     guards.assert_changes_expected(
-        changes, inv.all_paths, cfg, allow_workflows_list=desired is not None
+        staged_changes,
+        inv.all_paths,
+        cfg,
+        allow_workflows_list=desired is not None,
+        require_changes=False,
     )
 
-    # 12. Commit.
-    commit_message = "\n".join(
-        [
-            f"Promote {len(inv.entries)} path(s) to {env.name} [{timestamp}]",
-            "",
-            f"Source branch: {env.source}",
-            f"Target branch: {env.target}",
-            f"Staging branch: {staging_branch}",
-            f"Staging baseline commit: {base_sha}",
-            f"Inventory: {PROMOTION_FILENAME}",
-        ]
+    # 12. Commit temporary-branch changes when required. A user-created branch
+    # may already contain the exact approved source files; it can still be
+    # promoted if its full diff against the release baseline is safe.
+    if staged_changes:
+        commit_message = "\n".join(
+            [
+                f"Promote {len(inv.entries)} path(s) to {env.name} [{timestamp}]",
+                "",
+                f"Source branch: {env.source}",
+                f"Target branch: {env.target}",
+                f"Temporary branch: {staging_branch}",
+                f"Release baseline commit: {base_sha}",
+                f"Inventory: {PROMOTION_FILENAME}",
+            ]
+        )
+        commit_sha = git.commit(commit_message)
+        log(f"Committed {commit_sha} with {len(staged_changes)} change(s)")
+    else:
+        commit_sha = git.head_sha()
+        log("Temporary branch already contains the requested source files")
+
+    # 13. The PR must contain only requested changes (plus its inventory file),
+    # whether those changes were made above or already existed on the temporary
+    # branch. This prevents a user-created branch from smuggling unrelated files
+    # into the generated release branch.
+    changes = git.changes_between(base_sha, commit_sha)
+    guards.assert_changes_expected(
+        changes,
+        inv.all_paths,
+        cfg,
+        allow_workflows_list=desired is not None,
+        additional_allowed_paths=[PROMOTION_FILENAME],
     )
-    commit_sha = git.commit(commit_message)
-    log(f"Committed {commit_sha} with {len(changes)} change(s)")
 
     pull = PullRequest(
         title=render_title(env.name, timestamp),
@@ -280,6 +317,7 @@ def promote(
             base_sha=base_sha,
             timestamp=timestamp,
             staging_branch=staging_branch,
+            release_branch=release_branch,
             changes=changes,
             requested_promotes=inv.promote_paths,
             requested_deletes=inv.delete_paths,
@@ -288,7 +326,7 @@ def promote(
             release_description=release_description,
             run_url=run_url,
         ),
-        base=env.target,
+        base=release_branch,
         head=staging_branch,
     )
 
@@ -297,6 +335,7 @@ def promote(
         source_branch=env.source,
         target_branch=env.target,
         staging_branch=staging_branch,
+        release_branch=release_branch,
         base_sha=base_sha,
         timestamp=timestamp,
         commit_sha=commit_sha,
@@ -309,9 +348,11 @@ def promote(
         log("Dry run: stopping before any push.")
         return PromotionResult(**result_kwargs, pr_url="", dry_run=True)
 
-    # 13. Publish the existing staging branch, then open the Pull Request.
+    # 14. Publish the temporary branch and a new release branch, then open the PR.
     git.push_existing_branch(staging_branch)
     log(f"Pushed {staging_branch}")
+    git.push_new_branch(base_sha, release_branch)
+    log(f"Created {release_branch} from {env.target}")
 
     pr_url = backend.create(pull)
     log(f"Pull Request: {pr_url}")

@@ -18,9 +18,10 @@ def assert_push_allowed(branch: str, cfg: Config) -> None:
             E_PROTECTED_BRANCH,
             f"Refusing to push to protected branch {branch!r}.",
             details=[
-                "The pipeline only ever pushes the user-supplied staging branch.",
+                "The pipeline only ever pushes the user-supplied temporary branch "
+                "or a generated release branch.",
             ],
-            remedy="Select a non-protected staging branch and check "
+            remedy="Select a non-protected temporary branch and check "
             "'protected_branches' in promotion.config.json.",
         )
 
@@ -30,20 +31,26 @@ def assert_changes_expected(
     requested_paths: list[str],
     cfg: Config,
     allow_workflows_list: bool,
+    *,
+    additional_allowed_paths: list[str] | None = None,
+    require_changes: bool = True,
 ) -> None:
     """Verify the staged change set is exactly within the permitted path set."""
     if not changes:
+        if not require_changes:
+            return
         raise PromotionError(
             E_NO_CHANGES,
-            "The requested promotion produces no change against the target branch.",
+            "The temporary branch produces no change against the release baseline.",
             details=[
-                "Every requested file is already identical on the target branch.",
+                "Every requested file is already identical on the release baseline.",
             ],
-            remedy="Confirm the source branch actually contains the changes you "
-            "expect, then re-run.",
+            remedy="Confirm the temporary branch contains the intended promotion "
+            "changes, then re-run.",
         )
 
     allowed = set(requested_paths)
+    allowed.update(additional_allowed_paths or [])
     if allow_workflows_list:
         allowed.add(cfg.workflows_list_file)
 
