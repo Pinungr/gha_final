@@ -15,11 +15,11 @@ from promotion.errors import (
     E_PROMOTION_FILE_MISSING,
     E_PROTECTED_BRANCH,
     E_STAGING_SOURCE_MISMATCH,
-    E_STAGING_UNAUTHORIZED,
     E_UNEXPECTED_CHANGE,
     PromotionError,
 )
 from promotion.gitops import Git
+from promotion.__main__ import _summarise_success
 from promotion.pr import RecordingBackend
 from promotion.promote import promote
 
@@ -178,7 +178,7 @@ def _make_repository(
 
 
 def _run_promotion(
-    runner: Path, deployment_target: str = "PSUP"
+    runner: Path, deployment_target: str = "PSUP", messages: list[str] | None = None
 ) -> tuple[object, RecordingBackend]:
     backend = RecordingBackend()
     result = promote(
@@ -188,6 +188,7 @@ def _run_promotion(
         git=Git(runner),
         pr_backend=backend,
         now=datetime(2026, 8, 30, 10, 20, 30, tzinfo=timezone.utc),
+        log=(messages.append if messages is not None else lambda _message: None),
     )
     return result, backend
 
@@ -286,20 +287,19 @@ def test_master_delete_is_prepared_on_temporary_branch_without_release(tmp_path:
     assert result.release_branch is None
 
 
-def test_master_rejects_unexpected_temporary_branch_changes(tmp_path: Path) -> None:
+def test_master_preserves_additional_temporary_branch_changes_with_warning(tmp_path: Path) -> None:
     remote, runner = _make_repository(
         tmp_path,
         "file1\n",
         deployment_target="MASTER",
         unexpected_temporary_file=True,
     )
-    before = _remote_sha(remote, "reltest_30_08_2026")
+    messages: list[str] = []
+    result, _ = _run_promotion(runner, "MASTER", messages)
 
-    with pytest.raises(PromotionError) as caught:
-        _run_promotion(runner, "MASTER")
-
-    assert caught.value.code == E_STAGING_UNAUTHORIZED
-    assert _remote_sha(remote, "reltest_30_08_2026") == before
+    assert _remote_text(remote, result.staging_branch, "unexpected.txt") == "not approved"
+    assert result.additional_staging_changes == [("A", "unexpected.txt")]
+    assert any("WARNING: Additional staging changes" in message for message in messages)
     assert not any(branch.startswith("release/") for branch in _remote_branches(remote))
 
 
@@ -436,17 +436,20 @@ def test_manual_staging_mismatch_fails_before_push(tmp_path: Path, target: str) 
     assert _remote_sha(remote, "reltest_30_08_2026") == before
 
 
-def test_unauthorized_manual_deletion_fails(tmp_path: Path) -> None:
+def test_additional_manual_deletion_is_preserved(tmp_path: Path) -> None:
     remote, runner = _make_repository(
         tmp_path, "file2\n", manual_deletes=["file1"]
     )
-    before = _remote_sha(remote, "reltest_30_08_2026")
+    result, _ = _run_promotion(runner)
 
-    with pytest.raises(PromotionError) as caught:
-        _run_promotion(runner)
-
-    assert caught.value.code == E_STAGING_UNAUTHORIZED
-    assert _remote_sha(remote, "reltest_30_08_2026") == before
+    missing = subprocess.run(
+        ["git", "show", f"{result.staging_branch}:file1"],
+        cwd=remote,
+        capture_output=True,
+        text=True,
+    )
+    assert missing.returncode != 0
+    assert ("D", "file1") in result.additional_staging_changes
 
 
 def test_declared_manual_deletion_is_preserved(tmp_path: Path) -> None:
@@ -487,18 +490,17 @@ def test_invalid_workflow_list_path_is_not_reinterpreted(tmp_path: Path) -> None
     assert caught.value.code == "E_WFLIST_SYNC"
 
 
-def test_psup_rejects_unauthorized_manual_application_file(tmp_path: Path) -> None:
+def test_psup_preserves_additional_manual_application_file(tmp_path: Path) -> None:
     remote, runner = _make_repository(
         tmp_path, "file1\n", manual_files={"config/debug.yml": "debug: true\n"}
     )
-    before = _remote_sha(remote, "reltest_30_08_2026")
+    messages: list[str] = []
+    result, _ = _run_promotion(runner, "PSUP", messages)
 
-    with pytest.raises(PromotionError) as caught:
-        _run_promotion(runner, "PSUP")
-
-    assert caught.value.code == E_STAGING_UNAUTHORIZED
-    assert "config/debug.yml" in caught.value.details
-    assert _remote_sha(remote, "reltest_30_08_2026") == before
+    assert _remote_text(remote, result.staging_branch, "config/debug.yml") == "debug: true"
+    assert ("A", "config/debug.yml") in result.additional_staging_changes
+    assert ("A", "config/debug.yml") in result.changes
+    assert any("config/debug.yml" in message for message in messages)
 
 
 def test_promotion_file_is_permitted_metadata(tmp_path: Path) -> None:
@@ -507,3 +509,53 @@ def test_promotion_file_is_permitted_metadata(tmp_path: Path) -> None:
     result, _ = _run_promotion(runner, "PSUP")
 
     assert result.pr is not None
+
+
+def test_additional_workflow_is_preserved_listed_once_and_warned(tmp_path: Path) -> None:
+    remote, runner = _make_repository(
+        tmp_path,
+        "file2\n",
+        manual_files={"workflows/manual.json": '{"workflow": "manual"}\n'},
+        staging_workflows_list=(
+            "workflows/old.json\n./workflows/manual.json\nworkflows//manual.json\n"
+        ),
+    )
+    messages: list[str] = []
+
+    result, _ = _run_promotion(runner, "PSUP", messages)
+
+    assert _remote_text(remote, result.staging_branch, "workflows/manual.json") == (
+        '{"workflow": "manual"}'
+    )
+    assert _remote_text(remote, result.staging_branch, "workflows_list.txt") == (
+        "workflows/old.json\nworkflows/manual.json"
+    )
+    assert ("A", "workflows/manual.json") in result.additional_staging_changes
+    assert any("workflows/manual.json" in message for message in messages)
+
+
+def test_multiple_additional_staging_changes_are_in_pr_body_and_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, runner = _make_repository(
+        tmp_path,
+        "file2\n",
+        manual_files={
+            "config/manual.yml": "manual: true\n",
+            "Notebooks/test.ipynb": "{}\n",
+        },
+    )
+    result, _ = _run_promotion(runner)
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+
+    _summarise_success(result)
+
+    text = summary.read_text(encoding="utf-8")
+    assert result.pr is not None
+    assert "Additional staging changes (2)" in result.pr.body
+    assert "config/manual.yml" in result.pr.body
+    assert "Notebooks/test.ipynb" in result.pr.body
+    assert "## Additional staging changes" in text
+    assert "config/manual.yml" in text
+    assert "Notebooks/test.ipynb" in text

@@ -144,6 +144,7 @@ def render_body(
     requested_deletes: list[str],
     workflows_list_file: str,
     workflows_list_entries: list[str] | None,
+    additional_staging_changes: list[tuple[str, str]],
     release_description: str | None,
     run_url: str | None,
 ) -> str:
@@ -192,16 +193,27 @@ def render_body(
     lines.append("")
     if workflows_list_entries is None:
         lines.append(
-            "Not modified -- this request promotes no workflow paths."
+            "Not modified -- the final Pull Request has no non-deleted workflow paths."
         )
     else:
         lines.append(
-            f"Rebuilt from the {len(workflows_list_entries)} workflow path(s) "
-            f"promoted by this request. Previous contents were discarded."
+            f"Normalized and synchronized with {len(workflows_list_entries)} workflow "
+            "path(s) in the final Pull Request."
         )
         lines.append("")
         lines += [f"- `{entry}`" for entry in workflows_list_entries]
     lines.append("")
+
+    if additional_staging_changes:
+        lines += [
+            f"## Additional staging changes ({len(additional_staging_changes)})",
+            "",
+            "These paths are not listed in `promotion.txt`. They were preserved "
+            "and require reviewer validation:",
+            "",
+            *(f"- `{path}` ({status})" for status, path in additional_staging_changes),
+            "",
+        ]
 
     if release_description and release_description.strip():
         lines += ["## Release description", "", release_description.strip(), ""]

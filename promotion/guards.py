@@ -12,7 +12,6 @@ from .errors import (
     E_NO_CHANGES,
     E_PROTECTED_BRANCH,
     E_STAGING_SOURCE_MISMATCH,
-    E_STAGING_UNAUTHORIZED,
     E_UNEXPECTED_CHANGE,
     PromotionError,
 )
@@ -79,7 +78,7 @@ def validate_staging_changes(
     source_rev: str,
     staging_rev: str,
     metadata_paths: set[str],
-) -> tuple[set[str], set[str]]:
+) -> tuple[set[str], set[str], list[tuple[str, str]]]:
     """Authorize pre-existing temporary-branch changes before any checkout.
 
     A manually prepared path is admissible only when it is declared in
@@ -88,28 +87,17 @@ def validate_staging_changes(
     ``git`` is structural here to avoid coupling guards to the command wrapper.
     """
     entry_by_path = {entry.path: entry for entry in inventory.entries}
-    unauthorized = sorted(
-        {
-            path
-            for _status, path in changes
-            if path not in metadata_paths and path not in entry_by_path
-        }
+    additional_changes = sorted(
+        (status, path)
+        for status, path in changes
+        if path not in metadata_paths and path not in entry_by_path
     )
-    if unauthorized:
-        raise PromotionError(
-            E_STAGING_UNAUTHORIZED,
-            "Validation failed: temporary branch contains changes not declared "
-            "in promotion.txt.",
-            details=unauthorized,
-            remedy="Add each approved path to promotion.txt, or remove the "
-            "unrelated temporary-branch changes before re-running.",
-        )
 
     manually_prepared_promotes: set[str] = set()
     manually_prepared_deletes: set[str] = set()
     mismatches: list[str] = []
     for status, path in changes:
-        if path in metadata_paths:
+        if path in metadata_paths or path not in entry_by_path:
             continue
         entry = entry_by_path[path]
         if entry.action == DELETE:
@@ -152,4 +140,4 @@ def validate_staging_changes(
             remedy="Reset the listed files to the approved source content, or "
             "remove them from promotion.txt and the temporary branch.",
         )
-    return manually_prepared_promotes, manually_prepared_deletes
+    return manually_prepared_promotes, manually_prepared_deletes, additional_changes

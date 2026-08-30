@@ -92,6 +92,16 @@ def _summarise_success(result: PromotionResult) -> None:
         ]
     elif result.dry_run:
         lines.append("No branches were pushed and no Pull Request was created.")
+    if result.additional_staging_changes:
+        lines += [
+            "",
+            "## Additional staging changes",
+            "",
+            "The following files are not listed in `promotion.txt`. They were "
+            "preserved and are included in the Pull Request for reviewer validation:",
+            "",
+            *(f"- `{path}` ({status})" for status, path in result.additional_staging_changes),
+        ]
     _append("GITHUB_STEP_SUMMARY", "\n".join(lines))
 
 

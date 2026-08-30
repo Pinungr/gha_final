@@ -51,6 +51,7 @@ class PromotionResult:
     commit_sha: str | None
     changes: list[tuple[str, str]] = field(default_factory=list)
     workflows_list_entries: list[str] | None = None
+    additional_staging_changes: list[tuple[str, str]] = field(default_factory=list)
     pr_url: str = ""
     pr: PullRequest | None = None
     dry_run: bool = False
@@ -241,7 +242,7 @@ def promote(
     # 7. Repository-level validation, still before any write.
     _preflight_paths(git, inv, env, base_sha, staging_branch)
     staging_changes = git.changes_between(base_sha, staging_sha)
-    preserved_promotes, preserved_deletes = guards.validate_staging_changes(
+    preserved_promotes, preserved_deletes, additional_staging_changes = guards.validate_staging_changes(
         git=git,
         changes=staging_changes,
         inventory=inv,
@@ -249,6 +250,11 @@ def promote(
         staging_rev=staging_rev,
         metadata_paths={PROMOTION_FILENAME, cfg.workflows_list_file},
     )
+    if additional_staging_changes:
+        log("WARNING: Additional staging changes detected that are not listed in promotion.txt.")
+        log("WARNING: They will be preserved and included in the Pull Request for reviewer validation:")
+        for _status, path in additional_staging_changes:
+            log(f"::warning::Additional staging file not listed in promotion.txt: {path}")
 
     # 8. Check out the existing temporary branch at the fetched remote commit.
     git.checkout_existing_branch(staging_branch, staging_sha)
@@ -263,16 +269,22 @@ def promote(
         git.remove_paths(paths_to_delete)
         log(f"Deleted {len(paths_to_delete)} file(s)")
 
-    # 10. The workflows_list.txt rebuild rule (section 10).
+    # 10. Maintain the workflow list from every non-deleted workflow in the
+    # final intended PR, including preserved user staging changes.
+    intended_changes = git.working_changes_from(base_sha)
+    required_workflow_paths = [
+        path
+        for status, path in intended_changes
+        if status[:1] != "D" and cfg.is_workflow_path(path)
+    ]
     existing_list = ""
     if git.object_type("HEAD", cfg.workflows_list_file) == "blob":
         existing_list = git.read_index_text(cfg.workflows_list_file)
-    desired = workflows_list.desired_content(existing_list, inv, cfg)
+    desired = workflows_list.desired_content(existing_list, required_workflow_paths, cfg)
     list_entries: list[str] | None = None
     if desired is None:
         log(
-            f"{cfg.workflows_list_file}: unchanged (no workflow paths promoted "
-            f"by this request)"
+            f"{cfg.workflows_list_file}: unchanged (no workflow paths in the final PR)"
         )
     else:
         list_path = repo_root / cfg.workflows_list_file
@@ -316,17 +328,21 @@ def promote(
         commit_sha = git.head_sha()
         log("Temporary branch already contains the requested source files")
 
-    # 13. The PR must contain only requested changes (plus its inventory file),
-    # whether those changes were made above or already existed on the temporary
-    # branch. This prevents a user-created branch from smuggling unrelated files
-    # into the generated release branch.
+    # 13. The PR may carry preserved user staging changes, but the automation
+    # itself may only create requested paths and its known metadata files.
     changes = git.changes_between(base_sha, commit_sha)
     guards.assert_changes_expected(
         changes,
         inv.all_paths,
         cfg,
-        allow_workflows_list=desired is not None,
-        additional_allowed_paths=[PROMOTION_FILENAME],
+        allow_workflows_list=(
+            desired is not None
+            or any(path == cfg.workflows_list_file for _status, path in staging_changes)
+        ),
+        additional_allowed_paths=[
+            PROMOTION_FILENAME,
+            *(path for _status, path in additional_staging_changes),
+        ],
     )
 
     pull = PullRequest(
@@ -344,6 +360,7 @@ def promote(
             requested_deletes=inv.delete_paths,
             workflows_list_file=cfg.workflows_list_file,
             workflows_list_entries=list_entries,
+            additional_staging_changes=additional_staging_changes,
             release_description=release_description,
             run_url=run_url,
         ),
@@ -362,6 +379,7 @@ def promote(
         commit_sha=commit_sha,
         changes=changes,
         workflows_list_entries=list_entries,
+        additional_staging_changes=additional_staging_changes,
         pr=pull,
     )
 

@@ -6,7 +6,6 @@ import re
 
 from .config import Config
 from .errors import E_WFLIST_SYNC, PromotionError
-from .inventory import Inventory
 
 
 def _normalize_entry(raw: str, cfg: Config) -> str | None:
@@ -30,9 +29,11 @@ def _normalize_entry(raw: str, cfg: Config) -> str | None:
     return entry
 
 
-def desired_content(existing: str, inventory: Inventory, cfg: Config) -> str | None:
-    """Merge canonical existing entries with requested workflow paths."""
-    if not inventory.workflow_promote_paths:
+def desired_content(
+    existing: str, required_workflow_paths: list[str], cfg: Config
+) -> str | None:
+    """Merge canonical existing entries with workflow paths in the final PR."""
+    if not required_workflow_paths:
         return None
     ordered: list[str] = []
     seen: set[str] = set()
@@ -41,7 +42,7 @@ def desired_content(existing: str, inventory: Inventory, cfg: Config) -> str | N
         if path is not None and path not in seen:
             seen.add(path)
             ordered.append(path)
-    for path in inventory.workflow_promote_paths:
+    for path in required_workflow_paths:
         if path not in seen:
             seen.add(path)
             ordered.append(path)

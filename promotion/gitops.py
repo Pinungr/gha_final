@@ -152,6 +152,12 @@ class Git:
             "diff", "--no-renames", "--name-status", "-z", base, head
         )
 
+    def working_changes_from(self, base: str) -> list[tuple[str, str]]:
+        """Changes from ``base`` represented by the current index/worktree."""
+        return self._name_status(
+            "diff", "--no-renames", "--name-status", "-z", base
+        )
+
     def _name_status(self, *args: str) -> list[tuple[str, str]]:
         """Parse NUL-delimited output from ``git diff --name-status``."""
         raw = self.out(*args)
