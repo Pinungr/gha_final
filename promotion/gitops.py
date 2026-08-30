@@ -103,6 +103,10 @@ class Git:
         """The exact staged content of ``path``, as it will be committed."""
         return self.run_bytes("show", f":{path}").decode("utf-8")
 
+    def read_file_text(self, rev: str, path: str) -> str:
+        """Read a UTF-8 file from ``rev`` without checking it out."""
+        return self.run_bytes("show", f"{rev}:{path}").decode("utf-8")
+
     # -- inspection ---------------------------------------------------------
 
     def fetch(self) -> None:
@@ -156,8 +160,9 @@ class Git:
 
     # -- mutation (local only) ---------------------------------------------
 
-    def checkout_new_branch(self, name: str, start_sha: str) -> None:
-        self.run("checkout", "-q", "-b", name, start_sha)
+    def checkout_existing_branch(self, name: str, start_sha: str) -> None:
+        """Check out a local branch at an already-validated remote commit."""
+        self.run("checkout", "-q", "-B", name, start_sha)
 
     def checkout_paths_from(self, rev: str, paths: list[str]) -> None:
         for chunk in _batched(paths):
@@ -180,17 +185,6 @@ class Git:
 
     # -- remote mutation ---------------------------------------------------
 
-    def push_new_branch(self, sha: str, branch: str) -> None:
-        """Create ``branch`` on the remote at ``sha``, failing if it exists.
-
-        The empty ``--force-with-lease`` expectation means "require that this ref
-        does not exist", which makes creation atomic. A pre-flight existence
-        check alone would leave a window for a concurrent run to win the race
-        (BRD section 16: never reuse or overwrite a generated branch).
-        """
-        self.run(
-            "push",
-            f"--force-with-lease=refs/heads/{branch}:",
-            self.remote,
-            f"{sha}:refs/heads/{branch}",
-        )
+    def push_existing_branch(self, branch: str) -> None:
+        """Push the checked-out staging branch without force-overwriting it."""
+        self.run("push", self.remote, f"HEAD:refs/heads/{branch}")

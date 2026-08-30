@@ -1,9 +1,9 @@
 {
   "environments": {
-    "PSUP": { "source": "qa",   "target": "psup" },
+    "PSUP": { "source": "master", "target": "psup" },
     "PROD": { "source": "psup", "target": "prod" }
   },
-  "protected_branches": ["qa", "psup", "prod"],
+  "protected_branches": ["master", "psup", "prod"],
   "workflow_path_pattern": "workflows/**",
   "workflows_list_file": "workflows_list.txt",
   "timestamp_utc_offset": "+05:30"

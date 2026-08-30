@@ -1,7 +1,7 @@
 """Pull Request creation (BRD sections 13 and 17).
 
 The PR is the review and approval record, so its body carries everything needed
-to audit the promotion later: both branch names, the baseline commit, the
+to audit the promotion later: the source, target and staging branches, the baseline commit, the
 execution timestamp, and every requested path with its resulting change.
 
 Creation is isolated behind :class:`PrBackend` so the orchestrator can be tested
@@ -136,8 +136,7 @@ def render_body(
     target_branch: str,
     base_sha: str,
     timestamp: str,
-    temp_branch: str,
-    release_branch: str,
+    staging_branch: str,
     changes: list[tuple[str, str]],
     requested_promotes: list[str],
     requested_deletes: list[str],
@@ -156,11 +155,11 @@ def render_body(
         "| --- | --- |",
         f"| Target environment | `{env_name}` |",
         f"| Source branch | `{source_branch}` |",
-        f"| Target branch (baseline) | `{target_branch}` |",
+        f"| Target branch | `{target_branch}` |",
         f"| Baseline commit | `{base_sha}` |",
         f"| Execution timestamp | `{timestamp}` |",
-        f"| Temporary branch | `{temp_branch}` |",
-        f"| Release branch | `{release_branch}` |",
+        f"| Staging branch | `{staging_branch}` |",
+        f"| Inventory | `promotion.txt` |",
     ]
     if run_url:
         lines.append(f"| Workflow run | {run_url} |")
@@ -205,7 +204,7 @@ def render_body(
         "---",
         "",
         f"The source-of-truth branches (`{source_branch}`, `{target_branch}`) were "
-        "not modified. Squash and merge this Pull Request once the configured "
-        f"approvals are satisfied to publish the change to `{release_branch}`.",
+        "not modified by the automation. Squash and merge this Pull Request once "
+        f"the configured approvals are satisfied to publish the change to `{target_branch}`.",
     ]
     return "\n".join(lines)

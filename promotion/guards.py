@@ -1,6 +1,6 @@
 """Safety assertions that back the BRD's non-negotiable invariants.
 
-Section 14: the automation must never push to qa, psup or prod.
+Section 14: the automation must never push to master, psup or prod.
 Sections 6 and 20: the change set must contain nothing the user did not request,
 beyond the one permitted ``workflows_list.txt`` rebuild.
 """
@@ -18,11 +18,10 @@ def assert_push_allowed(branch: str, cfg: Config) -> None:
             E_PROTECTED_BRANCH,
             f"Refusing to push to protected branch {branch!r}.",
             details=[
-                "The pipeline only ever pushes generated temp/* and release/* "
-                "branches.",
+                "The pipeline only ever pushes the user-supplied staging branch.",
             ],
-            remedy="This indicates a bug in the promotion pipeline. Check "
-            "'protected_branches' and the generated branch names in the run log.",
+            remedy="Select a non-protected staging branch and check "
+            "'protected_branches' in promotion.config.json.",
         )
 
 

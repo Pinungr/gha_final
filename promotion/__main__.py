@@ -1,9 +1,9 @@
 """CLI entry point: ``python -m promotion``.
 
 Inputs arrive as ``INPUT_*`` environment variables (how ``workflow_dispatch``
-inputs are exposed) and can be overridden by flags for local runs. Failures are
-rendered both as GitHub annotations and into the job summary, so the operator
-sees every offending path without opening the raw log.
+inputs are exposed) and can be overridden by flags for local runs. The selected
+staging branch supplies the inventory through its root ``promotion.txt`` file.
+Failures are rendered both as GitHub annotations and into the job summary.
 """
 
 from __future__ import annotations
@@ -48,8 +48,7 @@ def _set_outputs(result: PromotionResult) -> None:
     for key, value in (
         ("timestamp", result.timestamp),
         ("base_sha", result.base_sha),
-        ("temp_branch", result.temp_branch),
-        ("release_branch", result.release_branch),
+        ("staging_branch", result.staging_branch),
         ("commit_sha", result.commit_sha or ""),
         ("pr_url", result.pr_url),
     ):
@@ -61,10 +60,10 @@ def _summarise_success(result: PromotionResult) -> None:
         ("Environment", result.environment),
         ("Source branch", f"`{result.source_branch}`"),
         ("Target branch", f"`{result.target_branch}`"),
+        ("Staging branch", f"`{result.staging_branch}`"),
         ("Baseline commit", f"`{result.base_sha}`"),
         ("Execution timestamp", f"`{result.timestamp}`"),
-        ("Temporary branch", f"`{result.temp_branch}`"),
-        ("Release branch", f"`{result.release_branch}`"),
+        ("Inventory", "`promotion.txt`"),
     ]
     lines = [
         "## Promotion prepared" if not result.dry_run else "## Dry run complete",
@@ -112,12 +111,12 @@ def _summarise_failure(error: PromotionError) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m promotion",
-        description="Prepare a release promotion and open a Pull Request.",
+        description="Promote the inventory in a staging branch and open a Pull Request.",
     )
     parser.add_argument("--target", help="Deployment target, e.g. PSUP or PROD.")
     parser.add_argument(
-        "--files",
-        help="Repository-relative paths, separated by ';' or newlines.",
+        "--staging-branch",
+        help="Existing user-created branch containing root promotion.txt.",
     )
     parser.add_argument("--description", help="Optional Pull Request description.")
     parser.add_argument(
@@ -137,14 +136,14 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     target = args.target or _env("INPUT_DEPLOYMENT_TARGET")
-    files = args.files or _env("INPUT_FILES_TO_PROMOTE")
+    staging_branch = args.staging_branch or _env("INPUT_STAGING_BRANCH")
     description = args.description or _env("INPUT_RELEASE_DESCRIPTION")
 
     try:
         result = promote(
             repo_root=Path(args.repo_root),
             deployment_target=target,
-            files_to_promote=files,
+            staging_branch=staging_branch,
             release_description=description,
             run_url=_run_url(),
             dry_run=args.dry_run,

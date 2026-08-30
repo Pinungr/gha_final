@@ -8,7 +8,13 @@ from dataclasses import dataclass
 from datetime import timedelta, timezone
 from pathlib import Path
 
-from .errors import E_BAD_CONFIG, E_BAD_TARGET, E_NO_TARGET, PromotionError
+from .errors import (
+    E_BAD_CONFIG,
+    E_BAD_STAGING_BRANCH,
+    E_BAD_TARGET,
+    E_NO_TARGET,
+    PromotionError,
+)
 
 CONFIG_FILENAME = "promotion.config.json"
 
@@ -59,11 +65,6 @@ class Environment:
     source: str
     target: str
 
-    @property
-    def slug(self) -> str:
-        """Lowercase suffix used in generated branch names (BRD section 5)."""
-        return self.name.lower()
-
 
 @dataclass(frozen=True)
 class Config:
@@ -76,7 +77,7 @@ class Config:
 
     @property
     def timestamp_tz(self) -> timezone:
-        """Timezone the generated branch names are stamped in (section 16)."""
+        """Timezone timestamps in PR and audit records are stamped in."""
         return timezone(self.timestamp_offset)
 
     def resolve(self, target_name: str | None) -> Environment:
@@ -122,6 +123,21 @@ def _require_branch(raw: object, field: str) -> str:
             f"{CONFIG_FILENAME}: {field!r} is not a valid branch name: {value!r}.",
         )
     return value
+
+
+def validate_branch_name(value: str, field: str = "branch") -> str:
+    """Validate a user-supplied branch name before it reaches git."""
+    try:
+        return _require_branch(value, field)
+    except PromotionError as error:
+        if error.code != E_BAD_CONFIG:  # pragma: no cover - defensive only
+            raise
+        raise PromotionError(
+            E_BAD_STAGING_BRANCH,
+            f"{field} is not a valid branch name: {value!r}.",
+            remedy="Select an existing repository branch, for example "
+            "'staging/customer_release_001'.",
+        ) from None
 
 
 def _require_offset(raw: object, field: str) -> timedelta:

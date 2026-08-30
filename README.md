@@ -5,20 +5,33 @@ Sample content used to exercise the automated release promotion pipeline.
 ## Promotion flow
 
 ```
-qa  ->  psup  ->  prod
+master  ->  psup  ->  prod
 ```
 
 Dispatch the `code_promotion` workflow from Actions, pick `PSUP` or `PROD`, and
-list the repository-relative paths to promote. Separate paths with `;` — the
-GitHub input box is single-line and will not accept newlines.
+select the user-created staging branch. Before dispatching, create that branch
+from the selected target branch and commit a root-level `promotion.txt` file
+with one repository-relative path per line. `DELETE|<path>` remains available
+for deletions.
 
 ```
-config/application.yml;workflows/customer_sync.json;DELETE|workflows/legacy_cleanup.json
+staging/customer_release_001/promotion.txt
+
+config/application.yml
+workflows/customer_sync.json
+DELETE|workflows/legacy_cleanup.json
 ```
 
-The pipeline assembles exactly that change set on a generated `temp/*` branch,
-opens a Pull Request into a matching `release/*` branch, and stops. `qa`, `psup`
-and `prod` are never written to by the automation.
+For a PSUP promotion, files named in `promotion.txt` are read from `master` and
+applied to the same staging branch. The pipeline validates the entire inventory
+before it modifies the checkout, commits and pushes that existing staging
+branch, then opens a Pull Request from it into `psup`. It never creates
+`temp/*` or `release/*` branches. `master`, `psup` and `prod` are never written to
+by the automation.
+
+The `promotion.txt` file must be at the repository root of the selected staging
+branch. Blank lines and surrounding whitespace are ignored; invalid or duplicate
+paths fail the run without a push or Pull Request.
 
 ## Layout
 

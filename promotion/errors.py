@@ -10,6 +10,8 @@ from __future__ import annotations
 E_NO_TARGET = "E_NO_TARGET"
 E_BAD_TARGET = "E_BAD_TARGET"
 E_NO_INPUT = "E_NO_INPUT"
+E_NO_STAGING_BRANCH = "E_NO_STAGING_BRANCH"
+E_BAD_STAGING_BRANCH = "E_BAD_STAGING_BRANCH"
 E_BAD_CONFIG = "E_BAD_CONFIG"
 
 # --- Path validation -------------------------------------------------------
@@ -21,10 +23,10 @@ E_CONFLICT_PATH = "E_CONFLICT_PATH"
 
 # --- Repository state ------------------------------------------------------
 E_BRANCH_MISSING = "E_BRANCH_MISSING"
+E_PROMOTION_FILE_MISSING = "E_PROMOTION_FILE_MISSING"
 E_MISSING_SOURCE = "E_MISSING_SOURCE"
 E_NOT_A_FILE = "E_NOT_A_FILE"
 E_BAD_DELETE = "E_BAD_DELETE"
-E_BRANCH_EXISTS = "E_BRANCH_EXISTS"
 
 # --- Change-set integrity --------------------------------------------------
 E_UNEXPECTED_CHANGE = "E_UNEXPECTED_CHANGE"

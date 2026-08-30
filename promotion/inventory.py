@@ -1,4 +1,4 @@
-"""Parsing and validation of the ``files_to_promote`` input (BRD section 11).
+"""Parsing and validation of the ``promotion.txt`` inventory (BRD section 11).
 
 Everything here runs before the first git write. A malformed inventory must fail
 the run while the repository is still untouched.
@@ -22,11 +22,9 @@ from .errors import (
 
 DELETE_PREFIX = "DELETE|"
 
-# Newline is the separator the BRD specifies. ';' is accepted as well because
-# workflow_dispatch has no multiline input type -- 'string' renders as a
-# single-line box in the GitHub UI, where a newline cannot be typed at all.
-# A wrong split can only ever produce a path that does not exist on the source
-# branch, which fails the run; it cannot promote the wrong file.
+# Newline is the supported separator. ';' remains accepted for backwards
+# compatibility with existing staged inventories created from the former GHA
+# input; it never bypasses path validation.
 SECONDARY_SEPARATOR = ";"
 
 PROMOTE = "promote"
@@ -130,7 +128,7 @@ def _split(text: str | None) -> list[tuple[int, str, str]]:
 
 
 def parse(text: str | None, cfg: Config) -> Inventory:
-    """Parse the ``files_to_promote`` input into a validated inventory."""
+    """Parse ``promotion.txt`` into a validated inventory."""
     parsed: list[Entry] = []
     malformed: dict[str, list[str]] = {}
 
@@ -175,7 +173,7 @@ def parse(text: str | None, cfg: Config) -> Inventory:
             if code in malformed:
                 raise PromotionError(
                     code,
-                    f"{len(malformed[code])} invalid path(s) in 'files_to_promote'.",
+                    f"{len(malformed[code])} invalid path(s) in 'promotion.txt'.",
                     details=malformed[code],
                     remedy="Use repository-relative paths with '/' separators, "
                     f"joined by '{SECONDARY_SEPARATOR}' or newlines.",
@@ -184,8 +182,8 @@ def parse(text: str | None, cfg: Config) -> Inventory:
     if not parsed:
         raise PromotionError(
             E_NO_INPUT,
-            "'files_to_promote' contained no file paths.",
-            remedy="Enter at least one repository-relative path. Separate "
+            "'promotion.txt' contained no file paths.",
+            remedy="Add at least one repository-relative path. Separate "
             f"multiple paths with '{SECONDARY_SEPARATOR}' or newlines.",
         )
 
@@ -208,7 +206,7 @@ def _check_list_file_conflict(entries: list[Entry], cfg: Config) -> None:
         return
     raise PromotionError(
         E_CONFLICT_PATH,
-        f"{cfg.workflows_list_file} cannot be listed in 'files_to_promote' when "
+        f"{cfg.workflows_list_file} cannot be listed in 'promotion.txt' when "
         f"the request also promotes workflow paths.",
         details=[
             f"{e.location}: {e.raw} ({'deletion' if e.is_delete else 'promotion'})"
@@ -247,11 +245,11 @@ def _check_duplicates(entries: list[Entry]) -> None:
         message = (
             f"{len(conflicts)} path(s) requested for both promotion and deletion"
             + (f", and {len(duplicates)} duplicate path(s)" if duplicates else "")
-            + " in 'files_to_promote'."
+            + " in 'promotion.txt'."
         )
     else:
         code = E_DUP_PATH
-        message = f"{len(duplicates)} duplicate path(s) in 'files_to_promote'."
+        message = f"{len(duplicates)} duplicate path(s) in 'promotion.txt'."
 
     raise PromotionError(
         code,

@@ -1,9 +1,9 @@
 name: code_promotion
 
-# Controlled promotion of an explicit set of files between environments.
-# QA -> PSUP -> PROD. The source-of-truth branches are never written to; the
-# change set is assembled on a generated temp/* branch and reviewed as a Pull
-# Request into a matching release/* branch.
+# Controlled promotion between environments. QA -> PSUP -> PROD. Operators
+# create the staging branch themselves from the target branch and commit its
+# root promotion.txt inventory before dispatching this workflow. The source and
+# target branches are never written to by the automation.
 #
 # Only users with write access to the repository can dispatch a workflow, which
 # is the authorization gate for this pipeline. See docs/INSTALL.md for an
@@ -19,14 +19,8 @@ on:
         options:
           - PSUP
           - PROD
-      # workflow_dispatch has no multiline input type -- 'string' renders as a
-      # single-line box, so a newline cannot be typed in the GitHub UI at all.
-      # ';' is therefore accepted alongside newlines. See docs/BRD-traceability.md
-      # deviation D11.
-      files_to_promote:
-        description: >-
-          Repository-relative paths, separated by ';' (or one per line when
-          dispatched via the API or gh). Prefix a path with DELETE| to remove it.
+      staging_branch:
+        description: "User-created staging branch containing root promotion.txt"
         required: true
         type: string
       release_description:
@@ -38,9 +32,9 @@ permissions:
   contents: write
   pull-requests: write
 
-# Two runs against the same target must not race for the same baseline HEAD.
+# Two runs against the same staging branch must not race for its baseline HEAD.
 concurrency:
-  group: code-promotion-${{ inputs.deployment_target }}
+  group: code-promotion-${{ inputs.deployment_target }}-${{ inputs.staging_branch }}
   cancel-in-progress: false
 
 jobs:
@@ -55,8 +49,9 @@ jobs:
         # actions/checkout v4.4.0
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          # Full history: the promotion reads blobs from the source branch and
-          # bases the new branches on the target branch tip.
+          # Start on the user-selected staging branch. The promotion also reads
+          # source blobs and validates remote branch tips.
+          ref: ${{ inputs.staging_branch }}
           fetch-depth: 0
 
       - name: Set up Python
@@ -74,7 +69,7 @@ jobs:
         id: promote
         env:
           INPUT_DEPLOYMENT_TARGET: ${{ inputs.deployment_target }}
-          INPUT_FILES_TO_PROMOTE: ${{ inputs.files_to_promote }}
+          INPUT_STAGING_BRANCH: ${{ inputs.staging_branch }}
           INPUT_RELEASE_DESCRIPTION: ${{ inputs.release_description }}
           GH_TOKEN: ${{ github.token }}
         run: python -m promotion
@@ -82,6 +77,5 @@ jobs:
       - name: Report result
         if: success()
         run: |
-          echo "Temporary branch : ${{ steps.promote.outputs.temp_branch }}"
-          echo "Release branch   : ${{ steps.promote.outputs.release_branch }}"
+          echo "Staging branch   : ${{ steps.promote.outputs.staging_branch }}"
           echo "Pull Request     : ${{ steps.promote.outputs.pr_url }}"
