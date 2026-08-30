@@ -1,4 +1,4 @@
-name: Code promotion — select staging branch
+name: code_promotion
 
 # Controlled promotion between environments. QA -> PSUP -> PROD. Operators
 # create a temporary branch and commit its root promotion.txt inventory before
