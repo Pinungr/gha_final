@@ -49,9 +49,10 @@ jobs:
         # actions/checkout v4.4.0
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          # Start on the user-selected temporary branch. The promotion also reads
-          # source blobs and validates remote branch tips.
-          ref: ${{ inputs.staging_branch }}
+          # Run the current promotion engine from master. It fetches and checks
+          # out the user-selected temporary branch only after all preflight
+          # validation has passed.
+          ref: master
           fetch-depth: 0
 
       - name: Set up Python
