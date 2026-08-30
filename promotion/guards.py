@@ -8,7 +8,15 @@ beyond the one permitted ``workflows_list.txt`` rebuild.
 from __future__ import annotations
 
 from .config import Config
-from .errors import E_NO_CHANGES, E_PROTECTED_BRANCH, E_UNEXPECTED_CHANGE, PromotionError
+from .errors import (
+    E_NO_CHANGES,
+    E_PROTECTED_BRANCH,
+    E_STAGING_SOURCE_MISMATCH,
+    E_STAGING_UNAUTHORIZED,
+    E_UNEXPECTED_CHANGE,
+    PromotionError,
+)
+from .inventory import DELETE, Inventory
 
 
 def assert_push_allowed(branch: str, cfg: Config) -> None:
@@ -53,13 +61,95 @@ def assert_changes_expected(
     allowed.update(additional_allowed_paths or [])
     if allow_workflows_list:
         allowed.add(cfg.workflows_list_file)
-
     unexpected = sorted({path for _, path in changes if path not in allowed})
     if unexpected:
         raise PromotionError(
             E_UNEXPECTED_CHANGE,
             f"{len(unexpected)} file(s) changed that were not requested.",
             details=unexpected,
-            remedy="No Pull Request was created and no protected branch was "
-            "modified. Report this: the pipeline must only touch requested paths.",
+            remedy="No Pull Request was created and no protected branch was modified.",
         )
+
+
+def validate_staging_changes(
+    *,
+    git: object,
+    changes: list[tuple[str, str]],
+    inventory: Inventory,
+    source_rev: str,
+    staging_rev: str,
+    metadata_paths: set[str],
+) -> tuple[set[str], set[str]]:
+    """Authorize pre-existing temporary-branch changes before any checkout.
+
+    A manually prepared path is admissible only when it is declared in
+    ``promotion.txt`` and is byte-for-byte the approved source version (or is a
+    declared deletion). Metadata is deliberately excluded from this comparison.
+    ``git`` is structural here to avoid coupling guards to the command wrapper.
+    """
+    entry_by_path = {entry.path: entry for entry in inventory.entries}
+    unauthorized = sorted(
+        {
+            path
+            for _status, path in changes
+            if path not in metadata_paths and path not in entry_by_path
+        }
+    )
+    if unauthorized:
+        raise PromotionError(
+            E_STAGING_UNAUTHORIZED,
+            "Validation failed: temporary branch contains changes not declared "
+            "in promotion.txt.",
+            details=unauthorized,
+            remedy="Add each approved path to promotion.txt, or remove the "
+            "unrelated temporary-branch changes before re-running.",
+        )
+
+    manually_prepared_promotes: set[str] = set()
+    manually_prepared_deletes: set[str] = set()
+    mismatches: list[str] = []
+    for status, path in changes:
+        if path in metadata_paths:
+            continue
+        entry = entry_by_path[path]
+        if entry.action == DELETE:
+            if status[:1] != "D":
+                mismatches.append(
+                    f"{path}: declared DELETE but is not deleted in the temporary branch"
+                )
+            else:
+                manually_prepared_deletes.add(path)
+            continue
+
+        if status[:1] == "D":
+            mismatches.append(
+                f"{path}: declared for promotion but is deleted in the temporary branch"
+            )
+            continue
+
+        source_kind = git.object_type(source_rev, path)
+        staging_kind = git.object_type(staging_rev, path)
+        if source_kind != "blob" or staging_kind != "blob":
+            mismatches.append(
+                f"{path}: does not exist as a file in both the temporary and "
+                "approved source branches"
+            )
+            continue
+        if git.read_file_bytes(staging_rev, path) != git.read_file_bytes(source_rev, path):
+            mismatches.append(
+                f"{path}: temporary-branch content does not match approved source "
+                f"'{source_rev.rsplit('/', 1)[-1]}'"
+            )
+            continue
+        manually_prepared_promotes.add(path)
+
+    if mismatches:
+        raise PromotionError(
+            E_STAGING_SOURCE_MISMATCH,
+            "Validation failed: manually prepared temporary-branch files do not "
+            "match the approved promotion source.",
+            details=mismatches,
+            remedy="Reset the listed files to the approved source content, or "
+            "remove them from promotion.txt and the temporary branch.",
+        )
+    return manually_prepared_promotes, manually_prepared_deletes

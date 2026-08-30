@@ -115,12 +115,12 @@ def _preflight_paths(
         if kind is None:
             bad_deletes.append(
                 f"{entry.location}: {entry.path} (not present on "
-                f"temporary branch '{staging_branch}')"
+                f"the target baseline for temporary branch '{staging_branch}')"
             )
         elif kind != "blob":
             bad_deletes.append(
                 f"{entry.location}: {entry.path} (is a {kind} on "
-                f"temporary branch '{staging_branch}')"
+                f"the target baseline for temporary branch '{staging_branch}')"
             )
 
     if bad_deletes:
@@ -128,8 +128,8 @@ def _preflight_paths(
             E_BAD_DELETE,
             f"{len(bad_deletes)} DELETE path(s) cannot be deleted.",
             details=bad_deletes,
-            remedy="A DELETE path must be an existing file on the supplied "
-            f"temporary branch '{staging_branch}'.",
+            remedy="A DELETE path must be an existing file on the target baseline "
+            f"for temporary branch '{staging_branch}'.",
         )
 
 
@@ -239,21 +239,35 @@ def promote(
         log(f"PR target: {pr_base} (no release branch for {env.name})")
 
     # 7. Repository-level validation, still before any write.
-    _preflight_paths(git, inv, env, staging_sha, staging_branch)
+    _preflight_paths(git, inv, env, base_sha, staging_branch)
+    staging_changes = git.changes_between(base_sha, staging_sha)
+    preserved_promotes, preserved_deletes = guards.validate_staging_changes(
+        git=git,
+        changes=staging_changes,
+        inventory=inv,
+        source_rev=f"refs/remotes/{git.remote}/{env.source}",
+        staging_rev=staging_rev,
+        metadata_paths={PROMOTION_FILENAME, cfg.workflows_list_file},
+    )
 
     # 8. Check out the existing temporary branch at the fetched remote commit.
     git.checkout_existing_branch(staging_branch, staging_sha)
 
     # 9. Apply source files to the same temporary branch.
-    if inv.promote_paths:
-        git.checkout_paths_from(f"refs/remotes/{git.remote}/{env.source}", inv.promote_paths)
-        log(f"Applied {len(inv.promote_paths)} file(s) from {env.source}")
-    if inv.delete_paths:
-        git.remove_paths(inv.delete_paths)
-        log(f"Deleted {len(inv.delete_paths)} file(s)")
+    paths_to_copy = [path for path in inv.promote_paths if path not in preserved_promotes]
+    paths_to_delete = [path for path in inv.delete_paths if path not in preserved_deletes]
+    if paths_to_copy:
+        git.checkout_paths_from(f"refs/remotes/{git.remote}/{env.source}", paths_to_copy)
+        log(f"Applied {len(paths_to_copy)} file(s) from {env.source}")
+    if paths_to_delete:
+        git.remove_paths(paths_to_delete)
+        log(f"Deleted {len(paths_to_delete)} file(s)")
 
     # 10. The workflows_list.txt rebuild rule (section 10).
-    desired = workflows_list.desired_content(inv, cfg)
+    existing_list = ""
+    if git.object_type("HEAD", cfg.workflows_list_file) == "blob":
+        existing_list = git.read_index_text(cfg.workflows_list_file)
+    desired = workflows_list.desired_content(existing_list, inv, cfg)
     list_entries: list[str] | None = None
     if desired is None:
         log(
@@ -267,9 +281,9 @@ def promote(
         git.add_paths([cfg.workflows_list_file])
         # Verify what will actually be committed, not the working-tree bytes:
         # on Windows checkouts autocrlf can make those differ.
-        workflows_list.verify(git.read_index_text(cfg.workflows_list_file), inv, cfg)
+        workflows_list.verify(git.read_index_text(cfg.workflows_list_file), desired, cfg)
         list_entries = desired.splitlines()
-        log(f"{cfg.workflows_list_file}: rebuilt with {len(list_entries)} entry(ies)")
+        log(f"{cfg.workflows_list_file}: synchronized with {len(list_entries)} entry(ies)")
 
     # 11. Nothing outside the requested set may have changed (sections 6, 20).
     staged_changes = git.staged_changes()

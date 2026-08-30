@@ -107,6 +107,10 @@ class Git:
         """Read a UTF-8 file from ``rev`` without checking it out."""
         return self.run_bytes("show", f"{rev}:{path}").decode("utf-8")
 
+    def read_file_bytes(self, rev: str, path: str) -> bytes:
+        """Read a file blob from ``rev`` without decoding it."""
+        return self.run_bytes("show", f"{rev}:{path}")
+
     # -- inspection ---------------------------------------------------------
 
     def fetch(self) -> None:
@@ -144,7 +148,9 @@ class Git:
 
     def changes_between(self, base: str, head: str = "HEAD") -> list[tuple[str, str]]:
         """``(status, path)`` for the change set from ``base`` to ``head``."""
-        return self._name_status("diff", "--name-status", "-z", base, head)
+        return self._name_status(
+            "diff", "--no-renames", "--name-status", "-z", base, head
+        )
 
     def _name_status(self, *args: str) -> list[tuple[str, str]]:
         """Parse NUL-delimited output from ``git diff --name-status``."""

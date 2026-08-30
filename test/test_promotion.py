@@ -14,6 +14,8 @@ from promotion.errors import (
     E_MISSING_SOURCE,
     E_PROMOTION_FILE_MISSING,
     E_PROTECTED_BRANCH,
+    E_STAGING_SOURCE_MISMATCH,
+    E_STAGING_UNAUTHORIZED,
     E_UNEXPECTED_CHANGE,
     PromotionError,
 )
@@ -63,6 +65,9 @@ def _make_repository(
     deployment_target: str = "PSUP",
     prepopulate_temporary_branch: bool = False,
     unexpected_temporary_file: bool = False,
+    manual_files: dict[str, str] | None = None,
+    manual_deletes: list[str] | None = None,
+    staging_workflows_list: str | None = None,
 ) -> tuple[Path, Path]:
     """Create all three routes plus a temporary branch for ``deployment_target``."""
     remote = tmp_path / "remote.git"
@@ -153,7 +158,15 @@ def _make_repository(
         _write(author, "file3", f"{sources[deployment_target]} version\n")
     if unexpected_temporary_file:
         _write(author, "unexpected.txt", "not approved\n")
-    if promotion_text is not None or prepopulate_temporary_branch or unexpected_temporary_file:
+    for path, content in (manual_files or {}).items():
+        _write(author, path, content)
+    for path in manual_deletes or []:
+        (author / path).unlink()
+    if staging_workflows_list is not None:
+        _write(author, "workflows_list.txt", staging_workflows_list)
+    if (promotion_text is not None or prepopulate_temporary_branch
+            or unexpected_temporary_file or manual_files or manual_deletes
+            or staging_workflows_list is not None):
         _git(author, "add", ".")
         _git(author, "commit", "-m", "Prepare temporary promotion branch")
     _git(author, "push", "-u", "origin", "reltest_30_08_2026")
@@ -251,7 +264,7 @@ def test_master_workflow_promotion_rebuilds_workflows_list(tmp_path: Path) -> No
     result, _ = _run_promotion(runner, "MASTER")
 
     assert _remote_text(remote, result.staging_branch, "workflows/dev.json") == '{"workflow": "dev"}'
-    assert _remote_text(remote, result.staging_branch, "workflows_list.txt") == "workflows/dev.json"
+    assert _remote_text(remote, result.staging_branch, "workflows_list.txt") == "workflows/old.json\nworkflows/dev.json"
     assert result.release_branch is None
 
 
@@ -285,7 +298,7 @@ def test_master_rejects_unexpected_temporary_branch_changes(tmp_path: Path) -> N
     with pytest.raises(PromotionError) as caught:
         _run_promotion(runner, "MASTER")
 
-    assert caught.value.code == E_UNEXPECTED_CHANGE
+    assert caught.value.code == E_STAGING_UNAUTHORIZED
     assert _remote_sha(remote, "reltest_30_08_2026") == before
     assert not any(branch.startswith("release/") for branch in _remote_branches(remote))
 
@@ -378,7 +391,7 @@ def test_workflow_promotion_rebuilds_workflows_list_on_the_staging_branch(tmp_pa
     result, _ = _run_promotion(runner)
 
     assert _remote_text(remote, result.staging_branch, "workflows/new.json") == '{"workflow": "new"}'
-    assert _remote_text(remote, result.staging_branch, "workflows_list.txt") == "workflows/new.json"
+    assert _remote_text(remote, result.staging_branch, "workflows_list.txt") == "workflows/old.json\nworkflows/new.json"
 
 
 def test_delete_from_promotion_txt_is_applied_to_the_existing_staging_branch(tmp_path: Path) -> None:
@@ -393,3 +406,104 @@ def test_delete_from_promotion_txt_is_applied_to_the_existing_staging_branch(tmp
         text=True,
     )
     assert missing.returncode != 0
+
+
+@pytest.mark.parametrize("target", ["MASTER", "PSUP"])
+def test_source_equivalent_manual_staging_change_is_preserved(tmp_path: Path, target: str) -> None:
+    source_value = "dev version\n" if target == "MASTER" else "master version\n"
+    remote, runner = _make_repository(
+        tmp_path, "file1\n", deployment_target=target, manual_files={"file1": source_value}
+    )
+    before = _remote_sha(remote, "reltest_30_08_2026")
+
+    result, _ = _run_promotion(runner, target)
+
+    assert result.commit_sha == before
+    assert _remote_sha(remote, result.staging_branch) == before
+
+
+@pytest.mark.parametrize("target", ["MASTER", "PSUP"])
+def test_manual_staging_mismatch_fails_before_push(tmp_path: Path, target: str) -> None:
+    remote, runner = _make_repository(
+        tmp_path, "file1\n", deployment_target=target, manual_files={"file1": "user version\n"}
+    )
+    before = _remote_sha(remote, "reltest_30_08_2026")
+
+    with pytest.raises(PromotionError) as caught:
+        _run_promotion(runner, target)
+
+    assert caught.value.code == E_STAGING_SOURCE_MISMATCH
+    assert _remote_sha(remote, "reltest_30_08_2026") == before
+
+
+def test_unauthorized_manual_deletion_fails(tmp_path: Path) -> None:
+    remote, runner = _make_repository(
+        tmp_path, "file2\n", manual_deletes=["file1"]
+    )
+    before = _remote_sha(remote, "reltest_30_08_2026")
+
+    with pytest.raises(PromotionError) as caught:
+        _run_promotion(runner)
+
+    assert caught.value.code == E_STAGING_UNAUTHORIZED
+    assert _remote_sha(remote, "reltest_30_08_2026") == before
+
+
+def test_declared_manual_deletion_is_preserved(tmp_path: Path) -> None:
+    remote, runner = _make_repository(
+        tmp_path, "DELETE|workflows/old.json\n", manual_deletes=["workflows/old.json"]
+    )
+
+    result, _ = _run_promotion(runner)
+
+    assert result.commit_sha == _remote_sha(remote, result.staging_branch)
+
+
+def test_workflow_list_normalizes_and_deduplicates_existing_entries(tmp_path: Path) -> None:
+    remote, runner = _make_repository(
+        tmp_path,
+        "workflows/new.json\n",
+        staging_workflows_list=(
+            " ./workflows/old.json \nworkflows\\old.json\n"
+            "/workflows//old.json\nworkflows/psup.json\n"
+        ),
+    )
+
+    result, _ = _run_promotion(runner)
+
+    assert _remote_text(remote, result.staging_branch, "workflows_list.txt") == (
+        "workflows/old.json\nworkflows/psup.json\nworkflows/new.json"
+    )
+
+
+def test_invalid_workflow_list_path_is_not_reinterpreted(tmp_path: Path) -> None:
+    _, runner = _make_repository(
+        tmp_path, "workflows/new.json\n", staging_workflows_list="workflow/new.json\n"
+    )
+
+    with pytest.raises(PromotionError) as caught:
+        _run_promotion(runner)
+
+    assert caught.value.code == "E_WFLIST_SYNC"
+
+
+def test_psup_rejects_unauthorized_manual_application_file(tmp_path: Path) -> None:
+    remote, runner = _make_repository(
+        tmp_path, "file1\n", manual_files={"config/debug.yml": "debug: true\n"}
+    )
+    before = _remote_sha(remote, "reltest_30_08_2026")
+
+    with pytest.raises(PromotionError) as caught:
+        _run_promotion(runner, "PSUP")
+
+    assert caught.value.code == E_STAGING_UNAUTHORIZED
+    assert "config/debug.yml" in caught.value.details
+    assert _remote_sha(remote, "reltest_30_08_2026") == before
+
+
+def test_promotion_file_is_permitted_metadata(tmp_path: Path) -> None:
+    _, runner = _make_repository(tmp_path, "file1\n", deployment_target="PSUP")
+
+    result, _ = _run_promotion(runner, "PSUP")
+
+    assert result.pr is not None
