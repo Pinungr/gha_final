@@ -61,7 +61,7 @@ The shared engine in `promotion/promote.py` dispatches route-specific rules to:
 
 | Module | Responsibility |
 | --- | --- |
-| `promotion/master/guards.py` | MASTER staging validation: workflow changes are preserved; non-workflow changes must match `dev_collaboration`. |
+| `promotion/master/guards.py` | MASTER staging validation: workflow changes are read from staging; non-workflow changes must match `dev_collaboration`. |
 | `promotion/master/promote.py` | Direct staging-to-master Pull Request; no release branch. |
 | `promotion/psup_prod/guards.py` | PSUP/PROD validation: every staging file must match the configured source branch. |
 | `promotion/psup_prod/promote.py` | PSUP/PROD timestamped release-branch planning. |

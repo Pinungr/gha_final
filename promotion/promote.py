@@ -89,6 +89,11 @@ def _preflight_paths(
     missing: list[str] = []
     not_a_file: list[str] = []
     for entry in inv.promotes:
+        # MASTER workflows are authored and promoted from the user-created
+        # staging branch. They are intentionally not required to exist on
+        # dev_collaboration.
+        if env.name == "MASTER" and entry.is_workflow:
+            continue
         kind = git.object_type(source_rev, entry.path)
         if kind is None:
             missing.append(f"{entry.location}: {entry.path}")

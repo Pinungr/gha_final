@@ -258,16 +258,39 @@ def test_master_promotes_from_dev_collaboration_directly_to_master(tmp_path: Pat
 
 def test_master_workflow_promotion_rebuilds_workflows_list(tmp_path: Path) -> None:
     remote, runner = _make_repository(
-        tmp_path, "workflows/dev.json\n", deployment_target="MASTER"
+        tmp_path,
+        "workflows/dev.json\n",
+        deployment_target="MASTER",
+        manual_files={"workflows/dev.json": '{"workflow": "staging"}\n'},
     )
 
     result, _ = _run_promotion(runner, "MASTER")
 
-    assert _remote_text(remote, result.staging_branch, "workflows/dev.json") == '{"workflow": "dev"}'
+    assert _remote_text(remote, result.staging_branch, "workflows/dev.json") == '{"workflow": "staging"}'
     assert _remote_text(remote, result.staging_branch, "workflows_list.txt") == (
         "dev.json"
     )
     assert result.release_branch is None
+
+
+def test_master_declared_staging_workflow_need_not_exist_on_dev_collaboration(
+    tmp_path: Path,
+) -> None:
+    remote, runner = _make_repository(
+        tmp_path,
+        "workflows/staging_only.json\n",
+        deployment_target="MASTER",
+        manual_files={"workflows/staging_only.json": '{"workflow": "staging"}\n'},
+    )
+
+    result, _ = _run_promotion(runner, "MASTER")
+
+    assert _remote_text(
+        remote, result.staging_branch, "workflows/staging_only.json"
+    ) == '{"workflow": "staging"}'
+    assert _remote_text(remote, result.staging_branch, "workflows_list.txt") == (
+        "staging_only.json"
+    )
 
 
 def test_master_delete_is_prepared_on_temporary_branch_without_release(tmp_path: Path) -> None:

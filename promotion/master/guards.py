@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from .. import guards as common_guards
 from ..config import Config
+from ..errors import E_STAGING_SOURCE_MISMATCH, PromotionError
 from ..inventory import Inventory
 
 
@@ -41,6 +42,28 @@ def validate_staging_changes(
         source_rev=source_rev,
         staging_rev=staging_rev,
     )
+    declared_workflows = {
+        entry.path for entry in inventory.promotes if entry.is_workflow
+    }
+    declared_staging_workflows = {
+        path
+        for path in declared_workflows
+        if git.object_type(staging_rev, path) == "blob"
+    }
+    missing_workflows = sorted(declared_workflows - declared_staging_workflows)
+    if missing_workflows:
+        raise PromotionError(
+            E_STAGING_SOURCE_MISMATCH,
+            (
+                "Declared MASTER workflow file(s) do not exist on the staging "
+                "branch."
+            ),
+            details=missing_workflows,
+            remedy=(
+                "Add and commit the listed workflow file(s) on the staging "
+                "branch, then re-run."
+            ),
+        )
     promotes, deletes = common_guards.validate_declared_staging_changes(
         git=git,
         changes=changes,
@@ -51,4 +74,4 @@ def validate_staging_changes(
         metadata_paths=metadata_paths,
         preserve_staging_workflows=True,
     )
-    return promotes, deletes, additional_changes
+    return promotes | declared_staging_workflows, deletes, additional_changes
