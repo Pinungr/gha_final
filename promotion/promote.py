@@ -275,29 +275,26 @@ def promote(
         git.remove_paths(paths_to_delete)
         log(f"Deleted {len(paths_to_delete)} file(s)")
 
-    # 10. Rebuild the workflow list exclusively from workflows explicitly
-    # requested in this promotion that actually differ in the final PR. Neither
-    # the target nor staging branch's prior list entries are carried forward.
+    # 10. Rebuild the workflow list from every workflow file actually changed in
+    # the final PR. Neither target nor staging branch list entries are carried
+    # forward, and a workflow absent from the PR cannot enter the list.
     intended_changes = git.working_changes_from(base_sha)
-    final_non_deleted_paths = {
-        path for status, path in intended_changes if status[:1] != "D"
-    }
-    actual_promoted_workflow_paths = [
+    actual_pr_workflow_paths = [
         path
-        for path in inv.workflow_promote_paths
-        if path in final_non_deleted_paths
+        for status, path in intended_changes
+        if status[:1] != "D" and cfg.is_workflow_path(path)
     ]
-    workflow_request_paths = [
-        entry.path for entry in inv.entries if entry.is_workflow
-    ]
+    workflow_changed_in_pr = any(
+        cfg.is_workflow_path(path) for _status, path in intended_changes
+    )
     desired = (
         workflows_list.desired_content(
             "",
-            actual_promoted_workflow_paths,
+            actual_pr_workflow_paths,
             [],
             cfg,
         )
-        if workflow_request_paths
+        if workflow_changed_in_pr
         else None
     )
     list_entries: list[str] | None = None

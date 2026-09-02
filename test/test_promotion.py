@@ -321,6 +321,9 @@ def test_master_preserves_additional_staging_workflow_not_in_promotion_txt(
         '{"workflow": "manual"}'
     )
     assert ("A", "workflows/manual.json") in result.additional_staging_changes
+    assert _remote_text(remote, result.staging_branch, "workflows_list.txt") == (
+        "manual.json"
+    )
 
 
 def test_master_cannot_be_used_as_temporary_branch(tmp_path: Path) -> None:
@@ -428,9 +431,7 @@ def test_delete_from_promotion_txt_is_applied_to_the_existing_staging_branch(tmp
         text=True,
     )
     assert missing.returncode != 0
-    assert _remote_text(remote, result.staging_branch, "workflows_list.txt") == (
-        "workflows/old.json"
-    )
+    assert _remote_text(remote, result.staging_branch, "workflows_list.txt") == ""
 
 
 @pytest.mark.parametrize("target", ["MASTER", "PSUP"])

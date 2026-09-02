@@ -32,9 +32,6 @@ def desired_content(
     for compatibility with callers, but are intentionally ignored. The list is
     a record of this promotion, not a historical workflow registry.
     """
-    if not required_workflow_paths:
-        return None
-
     ordered: list[str] = []
     seen: set[str] = set()
     for repository_path in required_workflow_paths:
@@ -42,7 +39,7 @@ def desired_content(
         if path not in seen:
             seen.add(path)
             ordered.append(path)
-    return "\n".join(ordered) + "\n"
+    return "\n".join(ordered) + ("\n" if ordered else "")
 
 
 def verify(actual: str, expected: str, cfg: Config) -> None:
