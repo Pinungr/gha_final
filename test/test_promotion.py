@@ -305,6 +305,24 @@ def test_master_rejects_unapproved_additional_temporary_branch_changes(tmp_path:
     assert not any(branch.startswith("release/") for branch in _remote_branches(remote))
 
 
+def test_master_preserves_additional_staging_workflow_not_in_promotion_txt(
+    tmp_path: Path,
+) -> None:
+    remote, runner = _make_repository(
+        tmp_path,
+        "file1\n",
+        deployment_target="MASTER",
+        manual_files={"workflows/manual.json": '{"workflow": "manual"}\n'},
+    )
+
+    result, _ = _run_promotion(runner, "MASTER")
+
+    assert _remote_text(remote, result.staging_branch, "workflows/manual.json") == (
+        '{"workflow": "manual"}'
+    )
+    assert ("A", "workflows/manual.json") in result.additional_staging_changes
+
+
 def test_master_cannot_be_used_as_temporary_branch(tmp_path: Path) -> None:
     _, runner = _make_repository(tmp_path, "file1\n", deployment_target="MASTER")
 

@@ -29,6 +29,7 @@ def validate_staging_changes(
         inventory=inventory,
         cfg=cfg,
         metadata_paths=metadata_paths,
+        allow_unlisted_workflows=False,
     )
     common_guards.validate_additional_source_matches(
         git=git,

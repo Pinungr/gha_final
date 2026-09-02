@@ -87,8 +87,9 @@ def additional_staging_changes(
     inventory: Inventory,
     cfg: Config,
     metadata_paths: set[str],
+    allow_unlisted_workflows: bool,
 ) -> list[tuple[str, str]]:
-    """Return safe additional staging changes shared by every promotion route."""
+    """Return additional staging changes permitted by the selected route."""
 
     entry_by_path = {
         entry.path: entry
@@ -107,7 +108,7 @@ def additional_staging_changes(
         for status, path in additional_changes
         if cfg.is_workflow_path(path)
     ]
-    if unrequested_workflow_changes:
+    if unrequested_workflow_changes and not allow_unlisted_workflows:
         raise PromotionError(
             E_UNEXPECTED_CHANGE,
             (

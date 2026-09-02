@@ -1,8 +1,9 @@
 """MASTER-specific staging validation.
 
-MASTER preserves a declared workflow already prepared on staging. Declared
-non-workflow files and additional non-workflow staging changes must match
-``dev_collaboration`` before the PR can be created.
+MASTER preserves workflow changes already prepared on staging, whether or not
+they are listed in ``promotion.txt``. Declared non-workflow files and additional
+non-workflow staging changes must match ``dev_collaboration`` before the PR can
+be created.
 """
 
 from __future__ import annotations
@@ -28,10 +29,15 @@ def validate_staging_changes(
         inventory=inventory,
         cfg=cfg,
         metadata_paths=metadata_paths,
+        allow_unlisted_workflows=True,
     )
     common_guards.validate_additional_source_matches(
         git=git,
-        additional_changes=additional_changes,
+        additional_changes=[
+            (status, path)
+            for status, path in additional_changes
+            if not cfg.is_workflow_path(path)
+        ],
         source_rev=source_rev,
         staging_rev=staging_rev,
     )
