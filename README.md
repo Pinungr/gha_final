@@ -48,5 +48,23 @@ full PR diff contains only approved paths.
 | `Notebooks/` | Jupyter notebooks. |
 | `workflows/` | Job definitions. Drives the `workflows_list.txt` rebuild. |
 | `test/` | Tests for the sample content. |
-| `workflows_list.txt` | Rebuilt automatically whenever `workflows/` paths are promoted. |
+| `workflows_list.txt` | Rebuilt fresh from only the workflow files requested in the current `promotion.txt` that actually change in the PR. |
 | `promotion/` | The promotion pipeline itself. Standard library only. |
+
+Neither target-branch nor staging-branch list entries are carried into the new
+list. A workflow change not declared in the current `promotion.txt` is rejected
+before the automation commits, pushes, or creates a Pull Request.
+
+## Promotion flow modules
+
+The shared engine in `promotion/promote.py` dispatches route-specific rules to:
+
+| Module | Responsibility |
+| --- | --- |
+| `promotion/master/guards.py` | MASTER staging validation, including preserving declared staging workflow content. |
+| `promotion/master/promote.py` | Direct staging-to-master Pull Request; no release branch. |
+| `promotion/psup_prod/guards.py` | PSUP/PROD validation: every staging file must match the configured source branch. |
+| `promotion/psup_prod/promote.py` | PSUP/PROD timestamped release-branch planning. |
+
+Git operations, inventory parsing, Pull Request generation, branch safety, and
+`workflows_list.txt` generation remain shared so the two flows cannot drift.

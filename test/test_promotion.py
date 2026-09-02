@@ -19,7 +19,6 @@ from promotion.errors import (
     PromotionError,
 )
 from promotion.gitops import Git
-from promotion.__main__ import _summarise_success
 from promotion.pr import RecordingBackend
 from promotion.promote import promote
 
@@ -265,7 +264,9 @@ def test_master_workflow_promotion_rebuilds_workflows_list(tmp_path: Path) -> No
     result, _ = _run_promotion(runner, "MASTER")
 
     assert _remote_text(remote, result.staging_branch, "workflows/dev.json") == '{"workflow": "dev"}'
-    assert _remote_text(remote, result.staging_branch, "workflows_list.txt") == "workflows/old.json\nworkflows/dev.json"
+    assert _remote_text(remote, result.staging_branch, "workflows_list.txt") == (
+        "dev.json"
+    )
     assert result.release_branch is None
 
 
@@ -287,19 +288,20 @@ def test_master_delete_is_prepared_on_temporary_branch_without_release(tmp_path:
     assert result.release_branch is None
 
 
-def test_master_preserves_additional_temporary_branch_changes_with_warning(tmp_path: Path) -> None:
+def test_master_rejects_unapproved_additional_temporary_branch_changes(tmp_path: Path) -> None:
     remote, runner = _make_repository(
         tmp_path,
         "file1\n",
         deployment_target="MASTER",
         unexpected_temporary_file=True,
     )
-    messages: list[str] = []
-    result, _ = _run_promotion(runner, "MASTER", messages)
+    before = _remote_sha(remote, "reltest_30_08_2026")
 
-    assert _remote_text(remote, result.staging_branch, "unexpected.txt") == "not approved"
-    assert result.additional_staging_changes == [("A", "unexpected.txt")]
-    assert any("WARNING: Additional staging changes" in message for message in messages)
+    with pytest.raises(PromotionError) as caught:
+        _run_promotion(runner, "MASTER")
+
+    assert caught.value.code == E_STAGING_SOURCE_MISMATCH
+    assert _remote_sha(remote, "reltest_30_08_2026") == before
     assert not any(branch.startswith("release/") for branch in _remote_branches(remote))
 
 
@@ -391,7 +393,9 @@ def test_workflow_promotion_rebuilds_workflows_list_on_the_staging_branch(tmp_pa
     result, _ = _run_promotion(runner)
 
     assert _remote_text(remote, result.staging_branch, "workflows/new.json") == '{"workflow": "new"}'
-    assert _remote_text(remote, result.staging_branch, "workflows_list.txt") == "workflows/old.json\nworkflows/new.json"
+    assert _remote_text(remote, result.staging_branch, "workflows_list.txt") == (
+        "new.json"
+    )
 
 
 def test_delete_from_promotion_txt_is_applied_to_the_existing_staging_branch(tmp_path: Path) -> None:
@@ -406,6 +410,9 @@ def test_delete_from_promotion_txt_is_applied_to_the_existing_staging_branch(tmp
         text=True,
     )
     assert missing.returncode != 0
+    assert _remote_text(remote, result.staging_branch, "workflows_list.txt") == (
+        "workflows/old.json"
+    )
 
 
 @pytest.mark.parametrize("target", ["MASTER", "PSUP"])
@@ -436,20 +443,17 @@ def test_manual_staging_mismatch_fails_before_push(tmp_path: Path, target: str) 
     assert _remote_sha(remote, "reltest_30_08_2026") == before
 
 
-def test_additional_manual_deletion_is_preserved(tmp_path: Path) -> None:
+def test_psup_rejects_additional_manual_deletion(tmp_path: Path) -> None:
     remote, runner = _make_repository(
         tmp_path, "file2\n", manual_deletes=["file1"]
     )
-    result, _ = _run_promotion(runner)
+    before = _remote_sha(remote, "reltest_30_08_2026")
 
-    missing = subprocess.run(
-        ["git", "show", f"{result.staging_branch}:file1"],
-        cwd=remote,
-        capture_output=True,
-        text=True,
-    )
-    assert missing.returncode != 0
-    assert ("D", "file1") in result.additional_staging_changes
+    with pytest.raises(PromotionError) as caught:
+        _run_promotion(runner)
+
+    assert caught.value.code == E_STAGING_SOURCE_MISMATCH
+    assert _remote_sha(remote, "reltest_30_08_2026") == before
 
 
 def test_declared_manual_deletion_is_preserved(tmp_path: Path) -> None:
@@ -462,7 +466,7 @@ def test_declared_manual_deletion_is_preserved(tmp_path: Path) -> None:
     assert result.commit_sha == _remote_sha(remote, result.staging_branch)
 
 
-def test_workflow_list_normalizes_and_deduplicates_existing_entries(tmp_path: Path) -> None:
+def test_staging_workflow_list_is_ignored_for_fresh_current_promotion_list(tmp_path: Path) -> None:
     remote, runner = _make_repository(
         tmp_path,
         "workflows/new.json\n",
@@ -475,32 +479,51 @@ def test_workflow_list_normalizes_and_deduplicates_existing_entries(tmp_path: Pa
     result, _ = _run_promotion(runner)
 
     assert _remote_text(remote, result.staging_branch, "workflows_list.txt") == (
-        "workflows/old.json\nworkflows/psup.json\nworkflows/new.json"
+        "new.json"
     )
 
 
-def test_invalid_workflow_list_path_is_not_reinterpreted(tmp_path: Path) -> None:
-    _, runner = _make_repository(
+def test_invalid_staging_workflow_list_cannot_override_fresh_promotion_list(tmp_path: Path) -> None:
+    remote, runner = _make_repository(
         tmp_path, "workflows/new.json\n", staging_workflows_list="workflow/new.json\n"
     )
+
+    result, _ = _run_promotion(runner)
+
+    assert _remote_text(remote, result.staging_branch, "workflows_list.txt") == (
+        "new.json"
+    )
+
+
+def test_staging_workflow_list_change_without_workflow_request_is_rejected(
+    tmp_path: Path,
+) -> None:
+    remote, runner = _make_repository(
+        tmp_path,
+        "file2\n",
+        staging_workflows_list="workflows/old.json\nclosed-pr.json\n",
+    )
+    before = _remote_sha(remote, "reltest_30_08_2026")
 
     with pytest.raises(PromotionError) as caught:
         _run_promotion(runner)
 
-    assert caught.value.code == "E_WFLIST_SYNC"
+    assert caught.value.code == E_UNEXPECTED_CHANGE
+    assert "contains no workflow request" in caught.value.message
+    assert _remote_sha(remote, "reltest_30_08_2026") == before
 
 
-def test_psup_preserves_additional_manual_application_file(tmp_path: Path) -> None:
+def test_psup_rejects_additional_manual_application_file(tmp_path: Path) -> None:
     remote, runner = _make_repository(
         tmp_path, "file1\n", manual_files={"config/debug.yml": "debug: true\n"}
     )
-    messages: list[str] = []
-    result, _ = _run_promotion(runner, "PSUP", messages)
+    before = _remote_sha(remote, "reltest_30_08_2026")
 
-    assert _remote_text(remote, result.staging_branch, "config/debug.yml") == "debug: true"
-    assert ("A", "config/debug.yml") in result.additional_staging_changes
-    assert ("A", "config/debug.yml") in result.changes
-    assert any("config/debug.yml" in message for message in messages)
+    with pytest.raises(PromotionError) as caught:
+        _run_promotion(runner, "PSUP")
+
+    assert caught.value.code == E_STAGING_SOURCE_MISMATCH
+    assert _remote_sha(remote, "reltest_30_08_2026") == before
 
 
 def test_promotion_file_is_permitted_metadata(tmp_path: Path) -> None:
@@ -511,7 +534,7 @@ def test_promotion_file_is_permitted_metadata(tmp_path: Path) -> None:
     assert result.pr is not None
 
 
-def test_additional_workflow_is_preserved_listed_once_and_warned(tmp_path: Path) -> None:
+def test_additional_workflow_not_in_current_inventory_is_rejected(tmp_path: Path) -> None:
     remote, runner = _make_repository(
         tmp_path,
         "file2\n",
@@ -520,24 +543,18 @@ def test_additional_workflow_is_preserved_listed_once_and_warned(tmp_path: Path)
             "workflows/old.json\n./workflows/manual.json\nworkflows//manual.json\n"
         ),
     )
-    messages: list[str] = []
+    before = _remote_sha(remote, "reltest_30_08_2026")
 
-    result, _ = _run_promotion(runner, "PSUP", messages)
+    with pytest.raises(PromotionError) as caught:
+        _run_promotion(runner, "PSUP")
 
-    assert _remote_text(remote, result.staging_branch, "workflows/manual.json") == (
-        '{"workflow": "manual"}'
-    )
-    assert _remote_text(remote, result.staging_branch, "workflows_list.txt") == (
-        "workflows/old.json\nworkflows/manual.json"
-    )
-    assert ("A", "workflows/manual.json") in result.additional_staging_changes
-    assert any("workflows/manual.json" in message for message in messages)
+    assert caught.value.code == E_UNEXPECTED_CHANGE
+    assert "workflows/manual.json" in caught.value.details[0]
+    assert _remote_sha(remote, "reltest_30_08_2026") == before
 
 
-def test_multiple_additional_staging_changes_are_in_pr_body_and_summary(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _, runner = _make_repository(
+def test_psup_rejects_multiple_additional_staging_changes(tmp_path: Path) -> None:
+    remote, runner = _make_repository(
         tmp_path,
         "file2\n",
         manual_files={
@@ -545,17 +562,11 @@ def test_multiple_additional_staging_changes_are_in_pr_body_and_summary(
             "Notebooks/test.ipynb": "{}\n",
         },
     )
-    result, _ = _run_promotion(runner)
-    summary = tmp_path / "summary.md"
-    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    before = _remote_sha(remote, "reltest_30_08_2026")
 
-    _summarise_success(result)
+    with pytest.raises(PromotionError) as caught:
+        _run_promotion(runner)
 
-    text = summary.read_text(encoding="utf-8")
-    assert result.pr is not None
-    assert "Additional staging changes (2)" in result.pr.body
-    assert "config/manual.yml" in result.pr.body
-    assert "Notebooks/test.ipynb" in result.pr.body
-    assert "## Additional staging changes" in text
-    assert "config/manual.yml" in text
-    assert "Notebooks/test.ipynb" in text
+    assert caught.value.code == E_STAGING_SOURCE_MISMATCH
+    assert len(caught.value.details) == 2
+    assert _remote_sha(remote, "reltest_30_08_2026") == before

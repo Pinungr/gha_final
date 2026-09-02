@@ -2,47 +2,43 @@
 
 from __future__ import annotations
 
-import re
-
 from .config import Config
 from .errors import E_WFLIST_SYNC, PromotionError
 
+_WORKFLOWS_PREFIX = "workflows/"
 
-def _normalize_entry(raw: str, cfg: Config) -> str | None:
-    """Normalize harmless spelling variants without guessing different paths."""
-    entry = raw.strip()
-    if not entry:
-        return None
-    entry = entry.replace("\\", "/")
-    while entry.startswith("./"):
-        entry = entry[2:]
-    entry = re.sub(r"/+", "/", entry)
-    if entry.startswith("/"):
-        entry = entry.lstrip("/")
-    if not cfg.is_workflow_path(entry):
+
+def _relative_path(repository_path: str, cfg: Config) -> str:
+    """Convert a repository workflow path to its list-file representation."""
+    if not repository_path.startswith(_WORKFLOWS_PREFIX) or not cfg.is_workflow_path(
+        repository_path
+    ):
         raise PromotionError(
             E_WFLIST_SYNC,
-            f"{cfg.workflows_list_file} contains an entry that cannot be safely normalized.",
-            details=[raw],
-            remedy="Use canonical workflow paths such as workflows/example.json.",
+            f"{cfg.workflows_list_file} cannot safely represent this workflow path.",
+            details=[repository_path],
+            remedy="Use repository workflow paths below workflows/.",
         )
-    return entry
-
-
+    return repository_path[len(_WORKFLOWS_PREFIX) :]
 def desired_content(
-    existing: str, required_workflow_paths: list[str], cfg: Config
+    existing: str,
+    required_workflow_paths: list[str],
+    available_workflow_paths: list[str],
+    cfg: Config,
 ) -> str | None:
-    """Merge canonical existing entries with workflow paths in the final PR."""
+    """Build a fresh list from workflows actually promoted in this PR.
+
+    ``existing`` and ``available_workflow_paths`` are retained in the signature
+    for compatibility with callers, but are intentionally ignored. The list is
+    a record of this promotion, not a historical workflow registry.
+    """
     if not required_workflow_paths:
         return None
+
     ordered: list[str] = []
     seen: set[str] = set()
-    for raw in existing.splitlines():
-        path = _normalize_entry(raw, cfg)
-        if path is not None and path not in seen:
-            seen.add(path)
-            ordered.append(path)
-    for path in required_workflow_paths:
+    for repository_path in required_workflow_paths:
+        path = _relative_path(repository_path, cfg)
         if path not in seen:
             seen.add(path)
             ordered.append(path)

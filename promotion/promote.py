@@ -18,7 +18,6 @@ from . import guards, inventory as inventory_mod, workflows_list
 from .config import Config, Environment
 from .errors import (
     E_BAD_DELETE,
-    E_BRANCH_EXISTS,
     E_BRANCH_MISSING,
     E_GIT,
     E_MISSING_SOURCE,
@@ -29,7 +28,11 @@ from .errors import (
 )
 from .gitops import Git
 from .inventory import Inventory
+from .master import guards as master_guards
+from .master import promote as master_promote
 from .pr import GhCliBackend, PullRequest, RecordingBackend, render_body, render_title
+from .psup_prod import guards as psup_prod_guards
+from .psup_prod import promote as psup_prod_promote
 
 TIMESTAMP_FORMAT = "%d_%m_%Y_%H_%M_%S"
 PROMOTION_FILENAME = "promotion.txt"
@@ -219,37 +222,40 @@ def promote(
         f"({len(inv.promotes)} to promote, {len(inv.deletes)} to delete)"
     )
 
-    # 6. Select the PR base strategy. MASTER routes directly to its configured
-    # target; PSUP and PROD retain the generated release-branch workflow.
+    # 6. Select the route-specific Pull Request strategy.
     timestamp = make_timestamp(now, cfg.timestamp_tz)
-    release_branch: str | None = None
-    pr_base = env.target
-    if env.create_release_branch:
-        release_branch = f"release/{timestamp}_{env.slug}"
-        if release_branch in heads:
-            raise PromotionError(
-                E_BRANCH_EXISTS,
-                f"The generated release branch '{release_branch}' already exists.",
-                remedy="Re-run the workflow; a fresh release branch name will be "
-                "generated from the new execution timestamp.",
-            )
-        guards.assert_push_allowed(release_branch, cfg)
-        pr_base = release_branch
-        log(f"Release branch: {release_branch}")
+    if env.name == "MASTER":
+        release_branch, pr_base = master_promote.plan_pull_request(env=env, log=log)
     else:
-        log(f"PR target: {pr_base} (no release branch for {env.name})")
+        release_branch, pr_base = psup_prod_promote.plan_pull_request(
+            env=env,
+            heads=heads,
+            timestamp=timestamp,
+            cfg=cfg,
+            assert_push_allowed=guards.assert_push_allowed,
+            log=log,
+        )
 
     # 7. Repository-level validation, still before any write.
     _preflight_paths(git, inv, env, base_sha, staging_branch)
     staging_changes = git.changes_between(base_sha, staging_sha)
-    preserved_promotes, preserved_deletes, additional_staging_changes = guards.validate_staging_changes(
+    validation_args = dict(
         git=git,
         changes=staging_changes,
         inventory=inv,
+        cfg=cfg,
         source_rev=f"refs/remotes/{git.remote}/{env.source}",
         staging_rev=staging_rev,
         metadata_paths={PROMOTION_FILENAME, cfg.workflows_list_file},
     )
+    if env.name == "MASTER":
+        preserved_promotes, preserved_deletes, additional_staging_changes = (
+            master_guards.validate_staging_changes(**validation_args)
+        )
+    else:
+        preserved_promotes, preserved_deletes, additional_staging_changes = (
+            psup_prod_guards.validate_staging_changes(**validation_args)
+        )
     if additional_staging_changes:
         log("WARNING: Additional staging changes detected that are not listed in promotion.txt.")
         log("WARNING: They will be preserved and included in the Pull Request for reviewer validation:")
@@ -269,18 +275,31 @@ def promote(
         git.remove_paths(paths_to_delete)
         log(f"Deleted {len(paths_to_delete)} file(s)")
 
-    # 10. Maintain the workflow list from every non-deleted workflow in the
-    # final intended PR, including preserved user staging changes.
+    # 10. Rebuild the workflow list exclusively from workflows explicitly
+    # requested in this promotion that actually differ in the final PR. Neither
+    # the target nor staging branch's prior list entries are carried forward.
     intended_changes = git.working_changes_from(base_sha)
-    required_workflow_paths = [
+    final_non_deleted_paths = {
+        path for status, path in intended_changes if status[:1] != "D"
+    }
+    actual_promoted_workflow_paths = [
         path
-        for status, path in intended_changes
-        if status[:1] != "D" and cfg.is_workflow_path(path)
+        for path in inv.workflow_promote_paths
+        if path in final_non_deleted_paths
     ]
-    existing_list = ""
-    if git.object_type("HEAD", cfg.workflows_list_file) == "blob":
-        existing_list = git.read_index_text(cfg.workflows_list_file)
-    desired = workflows_list.desired_content(existing_list, required_workflow_paths, cfg)
+    workflow_request_paths = [
+        entry.path for entry in inv.entries if entry.is_workflow
+    ]
+    desired = (
+        workflows_list.desired_content(
+            "",
+            actual_promoted_workflow_paths,
+            [],
+            cfg,
+        )
+        if workflow_request_paths
+        else None
+    )
     list_entries: list[str] | None = None
     if desired is None:
         log(
