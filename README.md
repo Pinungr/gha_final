@@ -86,7 +86,7 @@ runner waiting for people:
 | --- | --- |
 | `promotion_pr_approved.yml` | Validates an approval for a signed promotion PR and requests its protected merge. |
 | `promotion_initial_merged.yml` | Dispatches `trigger_DBX_WF_management.yaml` for `master` or the generated release branch. |
-| `trigger_DBX_WF_management.yaml` | Provides the DBX deployment-action structure. Its handlers deliberately fail until the Databricks implementation is supplied, preventing a false successful deployment. |
+| `trigger_DBX_WF_management.yaml` | Provides the DBX deployment-action structure. Until Databricks commands are supplied, every action is an explicitly logged successful no-op. |
 | `promotion_deployment_completed.yml` | Starts post-deployment validation only after a successful DBX workflow run. |
 | `promotion_deployment_validation.yml` | Uses the configured GitHub Environment required-reviewer gate. MASTER completes after approval; PSUP/PROD create a signed final synchronization PR. |
 | `promotion_validation_timeout.yml` | Runs every five minutes, cancels expired validation runs, and records `VALIDATION_EXPIRED`. |

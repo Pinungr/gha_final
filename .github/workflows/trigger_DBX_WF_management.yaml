@@ -60,8 +60,8 @@ jobs:
     steps:
       - name: Await create/update_repo implementation
         run: |
-          echo "::error::No Databricks implementation has been supplied for create/update_repo."
-          exit 1
+          echo "Dummy deployment: create/update_repo intentionally performs no action."
+          echo "Status: successful no-op" >> "$GITHUB_STEP_SUMMARY"
 
   create_or_update_workflow:
     if: inputs.deployment_action == 'create/update_workflow'
@@ -70,8 +70,8 @@ jobs:
     steps:
       - name: Await create/update_workflow implementation
         run: |
-          echo "::error::No Databricks implementation has been supplied for create/update_workflow."
-          exit 1
+          echo "Dummy deployment: create/update_workflow intentionally performs no action."
+          echo "Status: successful no-op" >> "$GITHUB_STEP_SUMMARY"
 
   delete_workflow:
     if: inputs.deployment_action == 'delete_workflow'
@@ -80,8 +80,8 @@ jobs:
     steps:
       - name: Await delete_workflow implementation
         run: |
-          echo "::error::No Databricks implementation has been supplied for delete_workflow."
-          exit 1
+          echo "Dummy deployment: delete_workflow intentionally performs no action."
+          echo "Status: successful no-op" >> "$GITHUB_STEP_SUMMARY"
 
   create_update_and_trigger_workflow:
     if: inputs.deployment_action == 'create/update_and_trigger_workflow'
@@ -90,8 +90,8 @@ jobs:
     steps:
       - name: Await create/update_and_trigger_workflow implementation
         run: |
-          echo "::error::No Databricks implementation has been supplied for create/update_and_trigger_workflow."
-          exit 1
+          echo "Dummy deployment: create/update_and_trigger_workflow intentionally performs no action."
+          echo "Status: successful no-op" >> "$GITHUB_STEP_SUMMARY"
 
   trigger_workflow:
     if: inputs.deployment_action == 'trigger_workflow'
@@ -100,8 +100,8 @@ jobs:
     steps:
       - name: Await trigger_workflow implementation
         run: |
-          echo "::error::No Databricks implementation has been supplied for trigger_workflow."
-          exit 1
+          echo "Dummy deployment: trigger_workflow intentionally performs no action."
+          echo "Status: successful no-op" >> "$GITHUB_STEP_SUMMARY"
 
   no_operation:
     if: inputs.deployment_action == 'none'
