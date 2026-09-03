@@ -101,6 +101,13 @@ def _config(root: Path) -> Path:
                 "protected_branches": ["dev_collaboration", "master", "psup", "prod"],
                 "workflow_path_pattern": "workflows/**",
                 "workflows_list_file": "workflows_list.txt",
+                "lifecycle": {
+                    "validation_environments": {
+                        "MASTER": "ReleaseApproval",
+                        "PSUP": "ReleaseApproval",
+                        "PROD": "ReleaseApproval",
+                    }
+                },
             }
         ),
         encoding="utf-8",
@@ -220,7 +227,7 @@ def test_successful_deployment_starts_validation_once(
         gh, "run-123", 41, "PSUP", "500", "https://example.invalid/run/500", _config(tmp_path)
     )
 
-    assert environment == "PSUP_DEPLOYMENT_VALIDATION"
+    assert environment == "ReleaseApproval"
     assert "WAITING_FOR_VALIDATION" in gh.comments[-1]["body"]
 
 

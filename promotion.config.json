@@ -15,11 +15,11 @@
   "lifecycle": {
     "deployment_workflow": "trigger_DBX_WF_management.yaml",
     "validation_workflow": "promotion_deployment_validation.yml",
-    "validation_timeout_hours": 72,
+    "validation_timeout_hours": 24,
     "validation_environments": {
-      "MASTER": "MASTER_DEPLOYMENT_VALIDATION",
-      "PSUP": "PSUP_DEPLOYMENT_VALIDATION",
-      "PROD": "PROD_DEPLOYMENT_VALIDATION"
+      "MASTER": "ReleaseApproval",
+      "PSUP": "ReleaseApproval",
+      "PROD": "ReleaseApproval"
     }
   }
 }

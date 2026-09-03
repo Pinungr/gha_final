@@ -65,7 +65,7 @@ jobs:
         run: |
           echo "## Post-deployment validation requested" >> "$GITHUB_STEP_SUMMARY"
           echo "Promotion ID: ${{ inputs.promotion_id }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "Expires: 72 hours after this request began" >> "$GITHUB_STEP_SUMMARY"
+          echo "Expires: 24 hours after this request began" >> "$GITHUB_STEP_SUMMARY"
       - name: Remove Git credential
         if: always()
         run: git remote set-url origin "https://github.kp.org/${GITHUB_REPOSITORY}.git" || true
@@ -74,7 +74,7 @@ jobs:
     needs: request-validation
     runs-on: self-hosted
     environment:
-      name: ${{ needs.request-validation.outputs.validation_environment }}
+      name: ReleaseApproval
     steps:
       - name: Check out trusted master from internal GitHub
         working-directory: ${{ github.workspace }}

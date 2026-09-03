@@ -173,7 +173,7 @@ def validation_expiry(started_at: datetime, hours: int) -> datetime:
 
 
 def validation_is_expired(now: datetime, expires_at: datetime) -> bool:
-    """The deadline is exclusive: exactly 72 hours is expired."""
+    """The deadline is exclusive: it is expired at the configured deadline."""
     return now >= expires_at
 
 

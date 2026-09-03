@@ -2,7 +2,7 @@ name: Promotion validation timeout controller
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -27,7 +27,7 @@ jobs:
           git checkout --force -B master FETCH_HEAD
       - name: Verify Org Python
         run: python --version
-      - name: Expire validations at the 72-hour deadline
+      - name: Expire validations at the 24-hour deadline
         env:
           GH_HOST: github.kp.org
           GH_TOKEN: ${{ secrets.PROMOTION_AUTOMATION_TOKEN }}

@@ -272,7 +272,7 @@ def load(repo_root: Path, filename: str = CONFIG_FILENAME) -> Config:
         "lifecycle.validation_workflow",
     )
     validation_timeout_hours = _require_positive_int(
-        lifecycle.get("validation_timeout_hours", 72),
+        lifecycle.get("validation_timeout_hours", 24),
         "lifecycle.validation_timeout_hours",
     )
     raw_validation_environments = lifecycle.get("validation_environments", {})

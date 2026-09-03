@@ -89,14 +89,13 @@ runner waiting for people:
 | `trigger_DBX_WF_management.yaml` | Provides the DBX deployment-action structure. Until Databricks commands are supplied, every action is an explicitly logged successful no-op. |
 | `promotion_deployment_completed.yml` | Starts post-deployment validation only after a successful DBX workflow run. |
 | `promotion_deployment_validation.yml` | Uses the configured GitHub Environment required-reviewer gate. MASTER completes after approval; PSUP/PROD create a signed final synchronization PR. |
-| `promotion_validation_timeout.yml` | Runs every five minutes, cancels expired validation runs, and records `VALIDATION_EXPIRED`. |
+| `promotion_validation_timeout.yml` | Runs hourly, cancels validations not approved within 24 hours, and records `VALIDATION_EXPIRED`. |
 | `promotion_validation_completed.yml` | Records an Environment rejection/cancellation and prevents finalization. |
 
-Create these GitHub Environments and configure their required reviewers (up to
-six users or teams, as needed): `MASTER_DEPLOYMENT_VALIDATION`,
-`PSUP_DEPLOYMENT_VALIDATION`, and `PROD_DEPLOYMENT_VALIDATION`. Their names and
-the 72-hour deadline are configured in `promotion.config.json` under
-`lifecycle`.
+Create the GitHub Environment `ReleaseApproval` and configure its required
+reviewers (up to six users or teams, as needed). It is the shared post-deployment
+approval gate for MASTER, PSUP, and PROD; its name and the 24-hour deadline are
+configured in `promotion.config.json` under `lifecycle`.
 
 Set repository secret `PROMOTION_LIFECYCLE_HMAC_KEY` to a long random value.
 The initial workflow signs its metadata with this secret; continuation workflows

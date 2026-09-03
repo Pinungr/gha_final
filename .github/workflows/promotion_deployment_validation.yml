@@ -67,14 +67,14 @@ jobs:
             echo "| Target | \`${{ inputs.environment }}\` |"
             echo "| Initial PR | #${{ inputs.initial_pr_number }} |"
             echo "| Validation Environment | \`${{ steps.prepare.outputs.validation_environment }}\` |"
-            echo "| Expires | 72 hours after this request began |"
+            echo "| Expires | 24 hours after this request began |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   finalize-after-environment-approval:
     needs: request-validation
     runs-on: ubuntu-latest
     environment:
-      name: ${{ needs.request-validation.outputs.validation_environment }}
+      name: ReleaseApproval
     steps:
       - name: Check out trusted promotion automation
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
