@@ -1,0 +1,43 @@
+name: Promotion initial merge continuation
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  actions: write
+
+concurrency:
+  group: promotion-initial-merged-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch-deployment:
+    if: github.event.pull_request.merged == true
+    runs-on: self-hosted
+    steps:
+      - name: Check out trusted master from internal GitHub
+        working-directory: ${{ github.workspace }}
+        env:
+          REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
+        run: |
+          git init
+          git remote add origin "https://${REPO_TOKEN}@github.kp.org/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --prune origin master
+          git checkout --force -B master FETCH_HEAD
+      - name: Verify Org Python
+        run: python --version
+      - name: Continue managed promotion after merge
+        env:
+          GH_HOST: github.kp.org
+          GH_TOKEN: ${{ secrets.PROMOTION_AUTOMATION_TOKEN }}
+          GH_ENTERPRISE_TOKEN: ${{ secrets.PROMOTION_AUTOMATION_TOKEN }}
+          PROMOTION_LIFECYCLE_HMAC_KEY: ${{ secrets.PROMOTION_LIFECYCLE_HMAC_KEY }}
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m promotion.lifecycle pr-closed
+      - name: Remove Git credential
+        if: always()
+        run: git remote set-url origin "https://github.kp.org/${GITHUB_REPOSITORY}.git" || true

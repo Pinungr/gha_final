@@ -1,0 +1,93 @@
+name: code_promotion
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_target:
+        description: Promotion target
+        required: true
+        type: choice
+        options: [MASTER, PSUP, PROD]
+      release_description:
+        description: Optional description for the Pull Request
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: code-promotion-${{ inputs.deployment_target }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Promote to ${{ inputs.deployment_target }}
+    runs-on: self-hosted
+    timeout-minutes: 15
+    outputs:
+      promotion_id: ${{ steps.promote.outputs.promotion_id }}
+      has_workflow_changes: ${{ steps.promote.outputs.has_workflow_changes }}
+      deployment_action: ${{ steps.promote.outputs.deployment_action }}
+    steps:
+      - name: Check out trusted master from internal GitHub
+        working-directory: ${{ github.workspace }}
+        env:
+          REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
+        run: |
+          git init
+          git remote add origin "https://${REPO_TOKEN}@github.kp.org/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --prune origin master
+          git checkout --force -B master FETCH_HEAD
+      - name: Verify Org Python
+        run: |
+          python --version
+          python -m pip --version
+      - name: Configure git identity
+        run: |
+          git config user.name "L352823"
+          git config user.email "pinaki.x.sarangi@kp.org"
+      - name: Configure authenticated git for github.kp.org
+        env:
+          REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
+        run: |
+          git config --global url."https://${REPO_TOKEN}@github.kp.org/".insteadOf "https://github.kp.org/"
+      - name: Verify token access
+        env:
+          REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
+        run: git ls-remote "https://${REPO_TOKEN}@github.kp.org/${GITHUB_REPOSITORY}.git" HEAD >/dev/null
+      - name: Verify GitHub CLI token
+        env:
+          GH_HOST: github.kp.org
+          GH_ENTERPRISE_TOKEN: ${{ secrets.REPO_TOKEN }}
+        run: gh api --hostname github.kp.org user
+      - name: Prepare promotion and open Pull Request
+        id: promote
+        working-directory: ${{ github.workspace }}
+        env:
+          INPUT_DEPLOYMENT_TARGET: ${{ inputs.deployment_target }}
+          INPUT_STAGING_BRANCH: ${{ github.ref_name }}
+          INPUT_RELEASE_DESCRIPTION: ${{ inputs.release_description }}
+          GH_TOKEN: ${{ secrets.REPO_TOKEN }}
+          GH_HOST: github.kp.org
+          GH_ENTERPRISE_TOKEN: ${{ secrets.REPO_TOKEN }}
+          PROMOTION_LIFECYCLE_HMAC_KEY: ${{ secrets.PROMOTION_LIFECYCLE_HMAC_KEY }}
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m promotion
+      - name: Report result
+        if: success()
+        run: |
+          echo "Temporary branch : ${{ steps.promote.outputs.temporary_branch }}"
+          echo "Release branch   : ${{ steps.promote.outputs.release_branch }}"
+          echo "Pull Request     : ${{ steps.promote.outputs.pr_url }}"
+          echo "Promotion ID     : ${{ steps.promote.outputs.promotion_id }}"
+          echo "Workflow changes : ${{ steps.promote.outputs.has_workflow_changes }}"
+          echo "Deployment action: ${{ steps.promote.outputs.deployment_action }}"
+      - name: Remove Git credential
+        if: always()
+        env:
+          REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
+        run: |
+          git remote set-url origin "https://github.kp.org/${GITHUB_REPOSITORY}.git" || true
+          git config --global --unset-all url."https://${REPO_TOKEN}@github.kp.org/".insteadOf || true

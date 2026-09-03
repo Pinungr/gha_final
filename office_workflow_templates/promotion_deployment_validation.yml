@@ -1,0 +1,100 @@
+name: Promotion deployment validation
+
+run-name: "Promotion validation: ${{ inputs.promotion_id }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      promotion_id:
+        description: Promotion ID (set by automation)
+        required: true
+        type: string
+      initial_pr_number:
+        description: Initial promotion PR number (set by automation)
+        required: true
+        type: string
+      environment:
+        description: Promotion target (set by automation)
+        required: true
+        type: choice
+        options: [MASTER, PSUP, PROD]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: promotion-validation-${{ inputs.promotion_id }}
+  cancel-in-progress: false
+
+jobs:
+  request-validation:
+    runs-on: self-hosted
+    outputs:
+      validation_environment: ${{ steps.prepare.outputs.validation_environment }}
+    steps:
+      - name: Check out trusted master from internal GitHub
+        working-directory: ${{ github.workspace }}
+        env:
+          REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
+        run: |
+          git init
+          git remote add origin "https://${REPO_TOKEN}@github.kp.org/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --prune origin master
+          git checkout --force -B master FETCH_HEAD
+      - name: Verify Org Python
+        run: python --version
+      - id: prepare
+        name: Request post-deployment validation
+        env:
+          GH_HOST: github.kp.org
+          GH_TOKEN: ${{ secrets.PROMOTION_AUTOMATION_TOKEN }}
+          GH_ENTERPRISE_TOKEN: ${{ secrets.PROMOTION_AUTOMATION_TOKEN }}
+          PROMOTION_LIFECYCLE_HMAC_KEY: ${{ secrets.PROMOTION_LIFECYCLE_HMAC_KEY }}
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python -m promotion.lifecycle validation-started \
+            --promotion-id "${{ inputs.promotion_id }}" \
+            --initial-pr-number "${{ inputs.initial_pr_number }}" \
+            --environment "${{ inputs.environment }}" \
+            --run-id "${{ github.run_id }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --repo-root . >> "$GITHUB_OUTPUT"
+      - name: Write validation summary
+        run: |
+          echo "## Post-deployment validation requested" >> "$GITHUB_STEP_SUMMARY"
+          echo "Promotion ID: ${{ inputs.promotion_id }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Expires: 72 hours after this request began" >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove Git credential
+        if: always()
+        run: git remote set-url origin "https://github.kp.org/${GITHUB_REPOSITORY}.git" || true
+
+  finalize-after-environment-approval:
+    needs: request-validation
+    runs-on: self-hosted
+    environment:
+      name: ${{ needs.request-validation.outputs.validation_environment }}
+    steps:
+      - name: Check out trusted master from internal GitHub
+        working-directory: ${{ github.workspace }}
+        env:
+          REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
+        run: |
+          git init
+          git remote add origin "https://${REPO_TOKEN}@github.kp.org/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --prune origin master
+          git checkout --force -B master FETCH_HEAD
+      - name: Verify Org Python
+        run: python --version
+      - name: Finalize approved promotion
+        env:
+          GH_HOST: github.kp.org
+          GH_TOKEN: ${{ secrets.PROMOTION_AUTOMATION_TOKEN }}
+          GH_ENTERPRISE_TOKEN: ${{ secrets.PROMOTION_AUTOMATION_TOKEN }}
+          PROMOTION_LIFECYCLE_HMAC_KEY: ${{ secrets.PROMOTION_LIFECYCLE_HMAC_KEY }}
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m promotion.lifecycle validation-approved --promotion-id "${{ inputs.promotion_id }}" --initial-pr-number "${{ inputs.initial_pr_number }}" --repo-root .
+      - name: Remove Git credential
+        if: always()
+        run: git remote set-url origin "https://github.kp.org/${GITHUB_REPOSITORY}.git" || true
