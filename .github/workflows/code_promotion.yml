@@ -29,9 +29,10 @@ permissions:
   contents: write
   pull-requests: write
 
-# Two runs against the same temporary branch must not race for its baseline HEAD.
+# Promotion preparation is serialized per target. Deployment remains owned by
+# the separate dummy DBX workflow and is intentionally not changed here.
 concurrency:
-  group: code-promotion-${{ inputs.deployment_target }}-${{ github.ref_name }}
+  group: code-promotion-${{ inputs.deployment_target }}
   cancel-in-progress: false
 
 jobs:

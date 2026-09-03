@@ -337,9 +337,17 @@ def handle_deployment_completed(client: GhClient, event: dict[str, Any]) -> None
     metadata = _metadata_from_pr(pr)
     assert metadata is not None
     number = int(pr["number"])
-    conclusion = str(run.get("conclusion") or "").lower()
     previous = _latest_record(_comments(client, number), metadata.promotion_id)
     deployment_sha = str((previous.data if previous else {}).get("deployment_sha") or "")
+    if (
+        not previous
+        or previous.state != LifecycleState.DEPLOYMENT_TRIGGERED
+        or not deployment_sha
+        or str(run.get("head_branch") or "") != metadata.deployment_branch
+        or str(run.get("head_sha") or "") != deployment_sha
+    ):
+        return
+    conclusion = str(run.get("conclusion") or "").lower()
     if conclusion != "success":
         _record(client, number, metadata.promotion_id, LifecycleState.DEPLOYMENT_FAILED, deployment_run_id=str(run.get("id") or ""), conclusion=conclusion)
         return
@@ -353,10 +361,19 @@ def handle_validation_started(client: GhClient, promotion_id: str, number: int, 
     metadata = _metadata_from_pr(pr)
     if not metadata or metadata.promotion_id != promotion_id or metadata.target != target:
         raise RuntimeError("validation input does not match a managed promotion Pull Request")
-    cfg = config_mod.load(cfg_path)
-    expiry = validation_expiry(_now(), cfg.validation_timeout_hours)
     previous = _latest_record(_comments(client, number), promotion_id)
     deployment_sha = str((previous.data if previous else {}).get("deployment_sha") or "")
+    if (
+        not previous
+        or previous.state != LifecycleState.DEPLOYMENT_SUCCEEDED
+        or not deployment_sha
+    ):
+        raise RuntimeError(
+            "Validation cannot start until this promotion records "
+            "DEPLOYMENT_SUCCEEDED with a non-empty deployment SHA."
+        )
+    cfg = config_mod.load(cfg_path)
+    expiry = validation_expiry(_now(), cfg.validation_timeout_hours)
     _record(client, number, promotion_id, LifecycleState.WAITING_FOR_VALIDATION, expires_at=_iso(expiry), validation_run_id=validation_run_id, validation_run_url=validation_run_url, deployment_sha=deployment_sha)
     return cfg.validation_environment(target)
 
@@ -373,17 +390,23 @@ def handle_validation_approved(client: GhClient, promotion_id: str, number: int,
     if validation_is_expired(_now(), expires):
         _record(client, number, promotion_id, LifecycleState.VALIDATION_EXPIRED)
         return
-    _record(client, number, promotion_id, LifecycleState.VALIDATION_APPROVED)
+    deployed_sha = str(state.data.get("deployment_sha") or "")
+    if not deployed_sha:
+        raise RuntimeError(
+            "Validation cannot be approved because the successful deployment "
+            "SHA is missing."
+        )
     if metadata.target == "MASTER":
+        _record(client, number, promotion_id, LifecycleState.VALIDATION_APPROVED)
         _record(client, number, promotion_id, LifecycleState.COMPLETED)
         return
-    deployed_sha = str(state.data.get("deployment_sha") or "")
     release = metadata.release_branch
     if not release:
         raise RuntimeError("PSUP/PROD promotion has no release branch")
     head = client.api(f"repos/{_repo()}/git/ref/heads/{release}")
-    if deployed_sha and head.get("object", {}).get("sha") != deployed_sha:
+    if head.get("object", {}).get("sha") != deployed_sha:
         raise RuntimeError("release branch HEAD differs from the approved deployed revision")
+    _record(client, number, promotion_id, LifecycleState.VALIDATION_APPROVED)
     final_body = "\n".join([MANAGED_MARKER, FINAL_MARKER, metadata_comment(metadata), f"Initial PR: #{number}", "", "Validated deployment synchronization."])
     existing = client.command("pr", "list", "--repo", _repo(), "--head", release, "--base", metadata.target, "--state", "open", "--json", "number,body,url")
     final_number: int | None = None
@@ -397,7 +420,10 @@ def handle_validation_approved(client: GhClient, promotion_id: str, number: int,
         final_number = int(created.rstrip("/").split("/")[-1])
         _record(client, number, promotion_id, LifecycleState.FINAL_PR_CREATED, final_pr_number=str(final_number))
     # The repository must grant this automation identity a narrowly scoped final-sync bypass if rules require it.
-    client.command("pr", "merge", str(final_number), "--repo", _repo(), "--squash", "--auto")
+    client.command(
+        "pr", "merge", str(final_number), "--repo", _repo(), "--squash", "--auto",
+        "--match-head-commit", deployed_sha,
+    )
 
 
 def handle_final_merged(client: GhClient, event: dict[str, Any]) -> None:
