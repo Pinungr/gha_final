@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .errors import E_GH, PromotionError
+from .lifecycle import MANAGED_MARKER, PromotionMetadata, metadata_comment
 
 _STATUS_LABEL = {
     "A": "added",
@@ -147,6 +148,7 @@ def render_body(
     additional_staging_changes: list[tuple[str, str]],
     release_description: str | None,
     run_url: str | None,
+    lifecycle_metadata: PromotionMetadata,
 ) -> str:
     status_by_path = {path: status for status, path in changes}
     lines: list[str] = []
@@ -225,5 +227,17 @@ def render_body(
         f"The source-of-truth branches (`{source_branch}`, `{target_branch}`) were "
         "not modified by the automation. Squash and merge this Pull Request once "
         f"the configured approvals are satisfied to publish the change to `{destination}`.",
+    ]
+    lines += [
+        "",
+        "## Promotion lifecycle",
+        "",
+        f"- Promotion ID: `{lifecycle_metadata.promotion_id}`",
+        f"- Workflow changes: `{'YES' if lifecycle_metadata.has_workflow_changes else 'NO'}`",
+        f"- Deployment action: `{lifecycle_metadata.deployment_action}`",
+        "- Status: `WAITING_FOR_PR_APPROVAL`",
+        "",
+        MANAGED_MARKER,
+        metadata_comment(lifecycle_metadata),
     ]
     return "\n".join(lines)

@@ -1,0 +1,112 @@
+name: Trigger DBX WF Management
+
+run-name: "DBX deployment: ${{ inputs.promotion_id || format('manual-{0}', github.run_id) }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment
+        required: true
+        type: choice
+        options: [MASTER, PSUP, PROD]
+      deployment_action:
+        description: Deployment Action
+        required: true
+        type: choice
+        options: [create/update_repo, none, create/update_workflow, delete_workflow, create/update_and_trigger_workflow, trigger_workflow]
+      promotion_id:
+        description: Promotion ID (set automatically; leave blank for a manual run)
+        required: false
+        type: string
+      initial_pr_number:
+        description: Initial promotion PR number (set automatically)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dbx-deployment-${{ inputs.promotion_id || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  context:
+    name: Deployment context
+    runs-on: ubuntu-latest
+    outputs:
+      branch: ${{ steps.context.outputs.branch }}
+    steps:
+      - id: context
+        run: |
+          echo "branch=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          {
+            echo "## DBX deployment requested"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Promotion ID | \`${{ inputs.promotion_id || format('manual-{0}', github.run_id) }}\` |"
+            echo "| Environment | \`${{ inputs.environment }}\` |"
+            echo "| Branch | \`${{ github.ref_name }}\` |"
+            echo "| Deployment action | \`${{ inputs.deployment_action }}\` |"
+            echo "| Status | Handler configuration required |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  create_or_update_repo:
+    if: inputs.deployment_action == 'create/update_repo'
+    needs: context
+    runs-on: ubuntu-latest
+    steps:
+      - name: Await create/update_repo implementation
+        run: |
+          echo "::error::No Databricks implementation has been supplied for create/update_repo."
+          exit 1
+
+  create_or_update_workflow:
+    if: inputs.deployment_action == 'create/update_workflow'
+    needs: context
+    runs-on: ubuntu-latest
+    steps:
+      - name: Await create/update_workflow implementation
+        run: |
+          echo "::error::No Databricks implementation has been supplied for create/update_workflow."
+          exit 1
+
+  delete_workflow:
+    if: inputs.deployment_action == 'delete_workflow'
+    needs: context
+    runs-on: ubuntu-latest
+    steps:
+      - name: Await delete_workflow implementation
+        run: |
+          echo "::error::No Databricks implementation has been supplied for delete_workflow."
+          exit 1
+
+  create_update_and_trigger_workflow:
+    if: inputs.deployment_action == 'create/update_and_trigger_workflow'
+    needs: context
+    runs-on: ubuntu-latest
+    steps:
+      - name: Await create/update_and_trigger_workflow implementation
+        run: |
+          echo "::error::No Databricks implementation has been supplied for create/update_and_trigger_workflow."
+          exit 1
+
+  trigger_workflow:
+    if: inputs.deployment_action == 'trigger_workflow'
+    needs: context
+    runs-on: ubuntu-latest
+    steps:
+      - name: Await trigger_workflow implementation
+        run: |
+          echo "::error::No Databricks implementation has been supplied for trigger_workflow."
+          exit 1
+
+  no_operation:
+    if: inputs.deployment_action == 'none'
+    needs: context
+    runs-on: ubuntu-latest
+    steps:
+      - name: Record no-op deployment
+        run: echo "No deployment action was requested." >> "$GITHUB_STEP_SUMMARY"

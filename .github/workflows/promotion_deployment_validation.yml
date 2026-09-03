@@ -1,0 +1,92 @@
+name: Promotion deployment validation
+
+run-name: "Promotion validation: ${{ inputs.promotion_id }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      promotion_id:
+        description: Promotion ID (set by automation)
+        required: true
+        type: string
+      initial_pr_number:
+        description: Initial promotion PR number (set by automation)
+        required: true
+        type: string
+      environment:
+        description: Promotion target (set by automation)
+        required: true
+        type: choice
+        options: [MASTER, PSUP, PROD]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: promotion-validation-${{ inputs.promotion_id }}
+  cancel-in-progress: false
+
+jobs:
+  request-validation:
+    runs-on: ubuntu-latest
+    outputs:
+      validation_environment: ${{ steps.prepare.outputs.validation_environment }}
+    steps:
+      - name: Check out trusted promotion automation
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: master
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+      - id: prepare
+        name: Request post-deployment validation
+        env:
+          GH_TOKEN: ${{ secrets.PROMOTION_AUTOMATION_TOKEN }}
+          PROMOTION_LIFECYCLE_HMAC_KEY: ${{ secrets.PROMOTION_LIFECYCLE_HMAC_KEY }}
+        run: |
+          python -m promotion.lifecycle validation-started \
+            --promotion-id "${{ inputs.promotion_id }}" \
+            --initial-pr-number "${{ inputs.initial_pr_number }}" \
+            --environment "${{ inputs.environment }}" \
+            --run-id "${{ github.run_id }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --repo-root . >> "$GITHUB_OUTPUT"
+      - name: Write validation summary
+        run: |
+          {
+            echo "## Post-deployment validation requested"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Promotion ID | \`${{ inputs.promotion_id }}\` |"
+            echo "| Target | \`${{ inputs.environment }}\` |"
+            echo "| Initial PR | #${{ inputs.initial_pr_number }} |"
+            echo "| Validation Environment | \`${{ steps.prepare.outputs.validation_environment }}\` |"
+            echo "| Expires | 72 hours after this request began |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  finalize-after-environment-approval:
+    needs: request-validation
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ needs.request-validation.outputs.validation_environment }}
+    steps:
+      - name: Check out trusted promotion automation
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: master
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+      - name: Finalize approved promotion
+        env:
+          GH_TOKEN: ${{ secrets.PROMOTION_AUTOMATION_TOKEN }}
+          PROMOTION_LIFECYCLE_HMAC_KEY: ${{ secrets.PROMOTION_LIFECYCLE_HMAC_KEY }}
+        run: python -m promotion.lifecycle validation-approved --promotion-id "${{ inputs.promotion_id }}" --initial-pr-number "${{ inputs.initial_pr_number }}" --repo-root .

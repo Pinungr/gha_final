@@ -52,6 +52,9 @@ def _set_outputs(result: PromotionResult) -> None:
         ("release_branch", result.release_branch or "Not Applicable"),
         ("commit_sha", result.commit_sha or ""),
         ("pr_url", result.pr_url),
+        ("promotion_id", result.promotion_id),
+        ("has_workflow_changes", str(result.has_workflow_changes).lower()),
+        ("deployment_action", result.deployment_action),
     ):
         _append("GITHUB_OUTPUT", f"{key}={value}")
 
@@ -69,6 +72,9 @@ def _summarise_success(result: PromotionResult) -> None:
         ("Release baseline commit", f"`{result.base_sha}`"),
         ("Execution timestamp", f"`{result.timestamp}`"),
         ("Inventory", "`promotion.txt`"),
+        ("Promotion ID", f"`{result.promotion_id}`"),
+        ("Workflow changes", "YES" if result.has_workflow_changes else "NO"),
+        ("Deployment action", f"`{result.deployment_action}`"),
     ]
     lines = [
         "## Promotion prepared" if not result.dry_run else "## Dry run complete",
@@ -161,6 +167,8 @@ def main(argv: list[str] | None = None) -> int:
             staging_branch=staging_branch,
             release_description=description,
             run_url=_run_url(),
+            correlation_id=_env("GITHUB_RUN_ID"),
+            lifecycle_secret=os.environ.get("PROMOTION_LIFECYCLE_HMAC_KEY", ""),
             dry_run=args.dry_run,
             log=lambda message: print(message, flush=True),
         )

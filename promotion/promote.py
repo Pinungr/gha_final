@@ -30,6 +30,12 @@ from .gitops import Git
 from .inventory import Inventory
 from .master import guards as master_guards
 from .master import promote as master_promote
+from .lifecycle import (
+    PromotionMetadata,
+    deployment_action_for,
+    make_promotion_id,
+    sign_metadata,
+)
 from .pr import GhCliBackend, PullRequest, RecordingBackend, render_body, render_title
 from .psup_prod import guards as psup_prod_guards
 from .psup_prod import promote as psup_prod_promote
@@ -52,6 +58,9 @@ class PromotionResult:
     base_sha: str
     timestamp: str
     commit_sha: str | None
+    promotion_id: str
+    has_workflow_changes: bool
+    deployment_action: str
     changes: list[tuple[str, str]] = field(default_factory=list)
     workflows_list_entries: list[str] | None = None
     additional_staging_changes: list[tuple[str, str]] = field(default_factory=list)
@@ -153,6 +162,8 @@ def promote(
     pr_backend: PrBackend | None = None,
     now: datetime | None = None,
     run_url: str | None = None,
+    correlation_id: str | None = None,
+    lifecycle_secret: str = "",
     dry_run: bool = False,
     log: Callable[[str], None] = lambda _msg: None,
 ) -> PromotionResult:
@@ -229,6 +240,7 @@ def promote(
 
     # 6. Select the route-specific Pull Request strategy.
     timestamp = make_timestamp(now, cfg.timestamp_tz)
+    promotion_id = make_promotion_id(correlation_id, timestamp)
     if env.name == "MASTER":
         release_branch, pr_base = master_promote.plan_pull_request(env=env, log=log)
     else:
@@ -384,6 +396,18 @@ def promote(
             additional_staging_changes=additional_staging_changes,
             release_description=release_description,
             run_url=run_url,
+            lifecycle_metadata=sign_metadata(PromotionMetadata(
+                promotion_id=promotion_id,
+                target=env.name,
+                staging_branch=staging_branch,
+                release_branch=release_branch,
+                deployment_branch=release_branch or env.target,
+                deployment_action=deployment_action_for(workflow_changed_in_pr),
+                has_workflow_changes=workflow_changed_in_pr,
+                initial_pr_base=pr_base,
+                base_sha=base_sha,
+                promotion_run_url=run_url,
+            ), lifecycle_secret),
         ),
         base=pr_base,
         head=staging_branch,
@@ -398,6 +422,9 @@ def promote(
         base_sha=base_sha,
         timestamp=timestamp,
         commit_sha=commit_sha,
+        promotion_id=promotion_id,
+        has_workflow_changes=workflow_changed_in_pr,
+        deployment_action=deployment_action_for(workflow_changed_in_pr),
         changes=changes,
         workflows_list_entries=list_entries,
         additional_staging_changes=additional_staging_changes,

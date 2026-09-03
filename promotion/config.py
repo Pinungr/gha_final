@@ -79,6 +79,10 @@ class Config:
     workflow_path_pattern: str
     workflows_list_file: str
     timestamp_offset: timedelta
+    deployment_workflow: str
+    validation_workflow: str
+    validation_timeout_hours: int
+    validation_environments: dict[str, str]
     _workflow_re: re.Pattern[str]
 
     @property
@@ -110,6 +114,10 @@ class Config:
 
     def is_protected(self, branch: str) -> bool:
         return branch in self.protected_branches
+
+    def validation_environment(self, target_name: str) -> str:
+        """Return the protected Environment used after a successful deployment."""
+        return self.validation_environments[self.resolve(target_name).name]
 
 
 def _require_str(raw: object, field: str) -> str:
@@ -167,6 +175,15 @@ def _require_offset(raw: object, field: str) -> timedelta:
             f"range (-12:00 to +14:00): {value!r}.",
         )
     return -offset if sign == "-" else offset
+
+
+def _require_positive_int(raw: object, field: str) -> int:
+    if not isinstance(raw, int) or isinstance(raw, bool) or raw <= 0:
+        raise PromotionError(
+            E_BAD_CONFIG,
+            f"{CONFIG_FILENAME}: {field!r} must be a positive integer.",
+        )
+    return raw
 
 
 def load(repo_root: Path, filename: str = CONFIG_FILENAME) -> Config:
@@ -243,6 +260,35 @@ def load(repo_root: Path, filename: str = CONFIG_FILENAME) -> Config:
             f"path: {list_file!r}.",
         )
 
+    lifecycle = raw.get("lifecycle", {})
+    if not isinstance(lifecycle, dict):
+        raise PromotionError(E_BAD_CONFIG, f"{CONFIG_FILENAME}: 'lifecycle' must be an object.")
+    deployment_workflow = _require_str(
+        lifecycle.get("deployment_workflow", "trigger_DBX_WF_management.yaml"),
+        "lifecycle.deployment_workflow",
+    )
+    validation_workflow = _require_str(
+        lifecycle.get("validation_workflow", "promotion_deployment_validation.yml"),
+        "lifecycle.validation_workflow",
+    )
+    validation_timeout_hours = _require_positive_int(
+        lifecycle.get("validation_timeout_hours", 72),
+        "lifecycle.validation_timeout_hours",
+    )
+    raw_validation_environments = lifecycle.get("validation_environments", {})
+    if not isinstance(raw_validation_environments, dict):
+        raise PromotionError(
+            E_BAD_CONFIG,
+            f"{CONFIG_FILENAME}: 'lifecycle.validation_environments' must be an object.",
+        )
+    validation_environments: dict[str, str] = {}
+    for name in environments:
+        default = f"{name}_DEPLOYMENT_VALIDATION"
+        validation_environments[name] = _require_str(
+            raw_validation_environments.get(name, default),
+            f"lifecycle.validation_environments.{name}",
+        )
+
     return Config(
         environments=environments,
         protected_branches=protected,
@@ -251,5 +297,9 @@ def load(repo_root: Path, filename: str = CONFIG_FILENAME) -> Config:
         timestamp_offset=_require_offset(
             raw.get("timestamp_utc_offset"), "timestamp_utc_offset"
         ),
+        deployment_workflow=deployment_workflow,
+        validation_workflow=validation_workflow,
+        validation_timeout_hours=validation_timeout_hours,
+        validation_environments=validation_environments,
         _workflow_re=_glob_to_regex(pattern),
     )

@@ -39,6 +39,10 @@ jobs:
     name: Promote to ${{ inputs.deployment_target }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      promotion_id: ${{ steps.promote.outputs.promotion_id }}
+      has_workflow_changes: ${{ steps.promote.outputs.has_workflow_changes }}
+      deployment_action: ${{ steps.promote.outputs.deployment_action }}
 
     steps:
       - name: Check out repository
@@ -70,6 +74,7 @@ jobs:
           INPUT_STAGING_BRANCH: ${{ github.ref_name }}
           INPUT_RELEASE_DESCRIPTION: ${{ inputs.release_description }}
           GH_TOKEN: ${{ github.token }}
+          PROMOTION_LIFECYCLE_HMAC_KEY: ${{ secrets.PROMOTION_LIFECYCLE_HMAC_KEY }}
         run: python -m promotion
 
       - name: Report result
@@ -78,3 +83,6 @@ jobs:
           echo "Temporary branch : ${{ steps.promote.outputs.temporary_branch }}"
           echo "Release branch   : ${{ steps.promote.outputs.release_branch }}"
           echo "Pull Request     : ${{ steps.promote.outputs.pr_url }}"
+          echo "Promotion ID     : ${{ steps.promote.outputs.promotion_id }}"
+          echo "Workflow changes : ${{ steps.promote.outputs.has_workflow_changes }}"
+          echo "Deployment action: ${{ steps.promote.outputs.deployment_action }}"
