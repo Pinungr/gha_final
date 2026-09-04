@@ -30,6 +30,7 @@ concurrency:
 
 jobs:
   request-validation:
+    if: inputs.environment == 'PSUP' || inputs.environment == 'PROD'
     runs-on: self-hosted
     outputs:
       validation_environment: ${{ steps.prepare.outputs.validation_environment }}
@@ -72,6 +73,7 @@ jobs:
 
   finalize-after-environment-approval:
     needs: request-validation
+    if: inputs.environment == 'PSUP' || inputs.environment == 'PROD'
     runs-on: self-hosted
     environment:
       name: ReleaseApproval

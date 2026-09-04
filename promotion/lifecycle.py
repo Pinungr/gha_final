@@ -43,6 +43,9 @@ class LifecycleState(StrEnum):
     VALIDATION_APPROVED = "VALIDATION_APPROVED"
     VALIDATION_REJECTED = "VALIDATION_REJECTED"
     VALIDATION_EXPIRED = "VALIDATION_EXPIRED"
+    ROLLBACK_TRIGGERED = "ROLLBACK_TRIGGERED"
+    ROLLBACK_SUCCEEDED = "ROLLBACK_SUCCEEDED"
+    ROLLBACK_FAILED = "ROLLBACK_FAILED"
     FINAL_PR_CREATED = "FINAL_PR_CREATED"
     FINAL_PR_MERGED = "FINAL_PR_MERGED"
     COMPLETED = "COMPLETED"
@@ -53,6 +56,8 @@ TERMINAL_STATES = {
     LifecycleState.DEPLOYMENT_FAILED,
     LifecycleState.VALIDATION_REJECTED,
     LifecycleState.VALIDATION_EXPIRED,
+    LifecycleState.ROLLBACK_SUCCEEDED,
+    LifecycleState.ROLLBACK_FAILED,
     LifecycleState.FINAL_PR_MERGED,
     LifecycleState.COMPLETED,
     LifecycleState.FAILED,
@@ -325,6 +330,53 @@ def _find_pr_by_id(client: GhClient, promotion_id: str) -> dict[str, Any] | None
     return None
 
 
+def _request_rollback(
+    client: GhClient,
+    metadata: PromotionMetadata,
+    number: int,
+    cfg: config_mod.Config,
+    reason: str,
+) -> None:
+    """Redeploy the current PSUP/PROD target revision after failed validation."""
+    if metadata.target not in {"PSUP", "PROD"}:
+        return
+    rollback_branch = cfg.resolve(metadata.target).target
+    ref = client.api(f"repos/{_repo()}/git/ref/heads/{rollback_branch}") or {}
+    rollback_sha = str(ref.get("object", {}).get("sha") or "")
+    if not rollback_sha:
+        raise RuntimeError(f"Cannot roll back {metadata.target}: target branch {rollback_branch!r} has no commit SHA")
+    _record(
+        client,
+        number,
+        metadata.promotion_id,
+        LifecycleState.ROLLBACK_TRIGGERED,
+        rollback_branch=rollback_branch,
+        rollback_sha=rollback_sha,
+        reason=reason,
+    )
+    try:
+        client.command(
+            "workflow",
+            "run",
+            cfg.deployment_workflow,
+            "--repo",
+            _repo(),
+            "--ref",
+            rollback_branch,
+            "-f",
+            f"environment={metadata.target}",
+            "-f",
+            "deployment_action=create/update_repo",
+            "-f",
+            f"promotion_id={metadata.promotion_id}",
+            "-f",
+            f"initial_pr_number={number}",
+        )
+    except RuntimeError:
+        _record(client, number, metadata.promotion_id, LifecycleState.ROLLBACK_FAILED, reason="rollback dispatch failed")
+        raise
+
+
 def handle_deployment_completed(client: GhClient, event: dict[str, Any]) -> None:
     run = event.get("workflow_run") or {}
     title = str(run.get("display_title") or "")
@@ -338,25 +390,42 @@ def handle_deployment_completed(client: GhClient, event: dict[str, Any]) -> None
     assert metadata is not None
     number = int(pr["number"])
     previous = _latest_record(_comments(client, number), metadata.promotion_id)
-    deployment_sha = str((previous.data if previous else {}).get("deployment_sha") or "")
+    if not previous:
+        return
+    is_rollback = previous.state == LifecycleState.ROLLBACK_TRIGGERED
+    expected_branch = str(
+        (previous.data.get("rollback_branch") if is_rollback else metadata.deployment_branch) or ""
+    )
+    expected_sha = str(
+        (previous.data.get("rollback_sha") if is_rollback else previous.data.get("deployment_sha")) or ""
+    )
     if (
-        not previous
-        or previous.state != LifecycleState.DEPLOYMENT_TRIGGERED
-        or not deployment_sha
-        or str(run.get("head_branch") or "") != metadata.deployment_branch
-        or str(run.get("head_sha") or "") != deployment_sha
+        previous.state not in {LifecycleState.DEPLOYMENT_TRIGGERED, LifecycleState.ROLLBACK_TRIGGERED}
+        or not expected_branch
+        or not expected_sha
+        or str(run.get("head_branch") or "") != expected_branch
+        or str(run.get("head_sha") or "") != expected_sha
     ):
         return
     conclusion = str(run.get("conclusion") or "").lower()
     if conclusion != "success":
-        _record(client, number, metadata.promotion_id, LifecycleState.DEPLOYMENT_FAILED, deployment_run_id=str(run.get("id") or ""), conclusion=conclusion)
+        state = LifecycleState.ROLLBACK_FAILED if is_rollback else LifecycleState.DEPLOYMENT_FAILED
+        _record(client, number, metadata.promotion_id, state, deployment_run_id=str(run.get("id") or ""), conclusion=conclusion)
         return
-    _record(client, number, metadata.promotion_id, LifecycleState.DEPLOYMENT_SUCCEEDED, deployment_run_id=str(run.get("id") or ""), deployment_run_url=str(run.get("html_url") or ""), deployment_sha=deployment_sha)
+    if is_rollback:
+        _record(client, number, metadata.promotion_id, LifecycleState.ROLLBACK_SUCCEEDED, rollback_run_id=str(run.get("id") or ""), rollback_run_url=str(run.get("html_url") or ""), rollback_sha=expected_sha)
+        return
+    _record(client, number, metadata.promotion_id, LifecycleState.DEPLOYMENT_SUCCEEDED, deployment_run_id=str(run.get("id") or ""), deployment_run_url=str(run.get("html_url") or ""), deployment_sha=expected_sha)
+    if metadata.target == "MASTER":
+        _record(client, number, metadata.promotion_id, LifecycleState.COMPLETED, deployment_sha=expected_sha)
+        return
     client.command("workflow", "run", "promotion_deployment_validation.yml", "--repo", _repo(), "--ref", "master",
                    "-f", f"promotion_id={metadata.promotion_id}", "-f", f"initial_pr_number={number}", "-f", f"environment={metadata.target}")
 
 
 def handle_validation_started(client: GhClient, promotion_id: str, number: int, target: str, validation_run_id: str, validation_run_url: str, cfg_path: Path) -> str:
+    if target not in {"PSUP", "PROD"}:
+        raise RuntimeError("Post-deployment validation is only used for PSUP and PROD promotions")
     pr = client.api(f"repos/{_repo()}/pulls/{number}")
     metadata = _metadata_from_pr(pr)
     if not metadata or metadata.promotion_id != promotion_id or metadata.target != target:
@@ -389,6 +458,13 @@ def handle_validation_approved(client: GhClient, promotion_id: str, number: int,
     expires = datetime.fromisoformat(str(state.data["expires_at"]).replace("Z", "+00:00"))
     if validation_is_expired(_now(), expires):
         _record(client, number, promotion_id, LifecycleState.VALIDATION_EXPIRED)
+        _request_rollback(
+            client,
+            metadata,
+            number,
+            config_mod.load(cfg_path),
+            "Environment approval arrived after the validation deadline",
+        )
         return
     deployed_sha = str(state.data.get("deployment_sha") or "")
     if not deployed_sha:
@@ -441,8 +517,12 @@ def handle_final_merged(client: GhClient, event: dict[str, Any]) -> None:
             final_pr_number=str(pr.get("number") or ""), release_branch=metadata.release_branch)
 
 
-def handle_validation_completed(client: GhClient, event: dict[str, Any]) -> None:
-    """Record an Environment rejection without changing any target branch."""
+def handle_validation_completed(
+    client: GhClient,
+    event: dict[str, Any],
+    cfg_path: Path = Path("."),
+) -> None:
+    """Record rejected PSUP/PROD validation and redeploy the target branch."""
     run = event.get("workflow_run") or {}
     title = str(run.get("display_title") or "")
     match = re.fullmatch(r"Promotion validation: (?P<id>[A-Za-z0-9._-]+)", title)
@@ -461,6 +541,13 @@ def handle_validation_completed(client: GhClient, event: dict[str, Any]) -> None
     if conclusion in {"cancelled", "failure", "timed_out", "action_required"}:
         _record(client, number, metadata.promotion_id, LifecycleState.VALIDATION_REJECTED,
                 validation_run_id=str(run.get("id") or ""), conclusion=conclusion)
+        _request_rollback(
+            client,
+            metadata,
+            number,
+            config_mod.load(cfg_path),
+            "Environment validation was rejected",
+        )
 
 
 def handle_timeout(client: GhClient, cfg_path: Path) -> int:
@@ -483,6 +570,7 @@ def handle_timeout(client: GhClient, cfg_path: Path) -> int:
         if run_id:
             client.command("run", "cancel", run_id, "--repo", _repo())
         _record(client, number, metadata.promotion_id, LifecycleState.VALIDATION_EXPIRED, reason="No Environment approval within configured validation window")
+        _request_rollback(client, metadata, number, cfg, "Environment validation expired")
         expired += 1
     return expired
 

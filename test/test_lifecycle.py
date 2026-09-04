@@ -17,7 +17,9 @@ from promotion.lifecycle import (
     handle_deployment_completed,
     handle_initial_approval,
     handle_validation_approved,
+    handle_validation_completed,
     handle_validation_started,
+    handle_timeout,
     metadata_comment,
     metadata_is_authenticated,
     parse_metadata,
@@ -63,6 +65,21 @@ class DeploymentGh(FakeGh):
         return super().api(endpoint, method=method, fields=fields)
 
 
+class RollbackGh(DeploymentGh):
+    def __init__(self, pr: dict, reviews: list[dict], branch_sha: str = "r" * 40) -> None:
+        super().__init__(pr, reviews)
+        self.branch_sha = branch_sha
+
+    def api(self, endpoint: str, *, method: str = "GET", fields: dict[str, str] | None = None):  # type: ignore[no-untyped-def]
+        if "/git/ref/heads/" in endpoint:
+            return {"object": {"sha": self.branch_sha}}
+        return super().api(endpoint, method=method, fields=fields)
+
+    def api_all(self, endpoint: str):  # type: ignore[no-untyped-def]
+        assert endpoint.endswith("pulls?state=all&per_page=100")
+        return [self.pr]
+
+
 def _metadata() -> PromotionMetadata:
     return PromotionMetadata(
         promotion_id="run-123",
@@ -103,7 +120,6 @@ def _config(root: Path) -> Path:
                 "workflows_list_file": "workflows_list.txt",
                 "lifecycle": {
                     "validation_environments": {
-                        "MASTER": "ReleaseApproval",
                         "PSUP": "ReleaseApproval",
                         "PROD": "ReleaseApproval",
                     }
@@ -229,6 +245,140 @@ def test_successful_deployment_starts_validation_once(
 
     assert environment == "ReleaseApproval"
     assert "WAITING_FOR_VALIDATION" in gh.comments[-1]["body"]
+
+
+def test_master_deployment_completes_without_validation(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("PROMOTION_LIFECYCLE_HMAC_KEY", "secret")
+    metadata = PromotionMetadata(
+        promotion_id="run-123",
+        target="MASTER",
+        staging_branch="staging/test",
+        release_branch=None,
+        deployment_branch="master",
+        deployment_action="create/update_repo",
+        has_workflow_changes=False,
+        initial_pr_base="master",
+        base_sha="a" * 40,
+    )
+    gh = DeploymentGh(_pr(f"{MANAGED_MARKER}\n{metadata_comment(sign_metadata(metadata, 'secret'))}"), [])
+    gh.comments = [_state(LifecycleState.DEPLOYMENT_TRIGGERED)]
+    event = {
+        "workflow_run": {
+            "display_title": "DBX deployment: run-123",
+            "head_branch": "master",
+            "head_sha": "d" * 40,
+            "conclusion": "success",
+            "id": 77,
+            "html_url": "https://example.invalid/run/77",
+        }
+    }
+
+    handle_deployment_completed(gh, event)
+
+    assert "COMPLETED" in gh.comments[-1]["body"]
+    assert gh.commands == []
+
+
+def test_rejected_psup_validation_dispatches_target_branch_rollback(
+    monkeypatch, tmp_path: Path
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("PROMOTION_LIFECYCLE_HMAC_KEY", "secret")
+    signed = sign_metadata(_metadata(), "secret")
+    gh = RollbackGh(_pr(f"{MANAGED_MARKER}\n{metadata_comment(signed)}"), [])
+    gh.comments = [
+        {
+            "body": state_comment(
+                LifecycleRecord(
+                    "run-123",
+                    LifecycleState.WAITING_FOR_VALIDATION,
+                    "2026-09-03T00:00:00Z",
+                    {"expires_at": "2099-01-01T00:00:00Z", "deployment_sha": "d" * 40},
+                )
+            )
+        }
+    ]
+    event = {
+        "workflow_run": {
+            "display_title": "Promotion validation: run-123",
+            "conclusion": "failure",
+            "id": 88,
+        }
+    }
+
+    handle_validation_completed(gh, event, _config(tmp_path))
+
+    assert "ROLLBACK_TRIGGERED" in gh.comments[-1]["body"]
+    assert gh.commands == [
+        (
+            "workflow", "run", "trigger_DBX_WF_management.yaml", "--repo", "owner/repo", "--ref", "psup",
+            "-f", "environment=PSUP", "-f", "deployment_action=create/update_repo",
+            "-f", "promotion_id=run-123", "-f", "initial_pr_number=41",
+        )
+    ]
+
+
+def test_expired_prod_validation_dispatches_target_branch_rollback(
+    monkeypatch, tmp_path: Path
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("PROMOTION_LIFECYCLE_HMAC_KEY", "secret")
+    metadata = PromotionMetadata(**{**_metadata().__dict__, "target": "PROD", "release_branch": "release/test_prod", "deployment_branch": "release/test_prod"})
+    gh = RollbackGh(_pr(f"{MANAGED_MARKER}\n{metadata_comment(sign_metadata(metadata, 'secret'))}"), [])
+    gh.comments = [
+        {
+            "body": state_comment(
+                LifecycleRecord(
+                    "run-123",
+                    LifecycleState.WAITING_FOR_VALIDATION,
+                    "2026-09-03T00:00:00Z",
+                    {"expires_at": "2000-01-01T00:00:00Z", "deployment_sha": "d" * 40, "validation_run_id": "88"},
+                )
+            )
+        }
+    ]
+
+    assert handle_timeout(gh, _config(tmp_path)) == 1
+
+    assert "ROLLBACK_TRIGGERED" in gh.comments[-1]["body"]
+    assert ("workflow", "run", "trigger_DBX_WF_management.yaml", "--repo", "owner/repo", "--ref", "prod") in [command[:7] for command in gh.commands]
+    assert any("deployment_action=create/update_repo" in command for command in gh.commands)
+
+
+def test_successful_rollback_is_recorded_without_starting_validation(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("PROMOTION_LIFECYCLE_HMAC_KEY", "secret")
+    signed = sign_metadata(_metadata(), "secret")
+    rollback_sha = "r" * 40
+    gh = RollbackGh(_pr(f"{MANAGED_MARKER}\n{metadata_comment(signed)}"), [], rollback_sha)
+    gh.comments = [
+        {
+            "body": state_comment(
+                LifecycleRecord(
+                    "run-123",
+                    LifecycleState.ROLLBACK_TRIGGERED,
+                    "2026-09-03T00:00:00Z",
+                    {"rollback_branch": "psup", "rollback_sha": rollback_sha},
+                )
+            )
+        }
+    ]
+    event = {
+        "workflow_run": {
+            "display_title": "DBX deployment: run-123",
+            "head_branch": "psup",
+            "head_sha": rollback_sha,
+            "conclusion": "success",
+            "id": 99,
+            "html_url": "https://example.invalid/run/99",
+        }
+    }
+
+    handle_deployment_completed(gh, event)
+
+    assert "ROLLBACK_SUCCEEDED" in gh.comments[-1]["body"]
+    assert gh.commands == []
 
 
 def test_final_merge_is_pinned_to_deployed_sha(monkeypatch) -> None:  # type: ignore[no-untyped-def]

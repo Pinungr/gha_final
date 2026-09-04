@@ -87,14 +87,14 @@ runner waiting for people:
 | `promotion_pr_approved.yml` | Validates an approval for a signed promotion PR and requests its protected merge. |
 | `promotion_initial_merged.yml` | Dispatches `trigger_DBX_WF_management.yaml` for `master` or the generated release branch. |
 | `trigger_DBX_WF_management.yaml` | Provides the DBX deployment-action structure. Until Databricks commands are supplied, every action is an explicitly logged successful no-op. |
-| `promotion_deployment_completed.yml` | Starts post-deployment validation only after a successful DBX workflow run. |
-| `promotion_deployment_validation.yml` | Uses the configured GitHub Environment required-reviewer gate. MASTER completes after approval; PSUP/PROD create a signed final synchronization PR. |
-| `promotion_validation_timeout.yml` | Runs hourly, cancels validations not approved within 24 hours, and records `VALIDATION_EXPIRED`. |
-| `promotion_validation_completed.yml` | Records an Environment rejection/cancellation and prevents finalization. |
+| `promotion_deployment_completed.yml` | Completes MASTER after deployment; starts post-deployment validation only for PSUP/PROD. |
+| `promotion_deployment_validation.yml` | Uses the configured GitHub Environment required-reviewer gate for PSUP/PROD, then creates a signed final synchronization PR after approval. |
+| `promotion_validation_timeout.yml` | Runs hourly, expires PSUP/PROD validations not approved within 24 hours, then redeploys the current PSUP/PROD target branch. |
+| `promotion_validation_completed.yml` | On a PSUP/PROD Environment rejection, records it and redeploys the current target branch. |
 
 Create the GitHub Environment `ReleaseApproval` and configure its required
 reviewers (up to six users or teams, as needed). It is the shared post-deployment
-approval gate for MASTER, PSUP, and PROD; its name and the 24-hour deadline are
+approval gate for PSUP and PROD; its name and the 24-hour deadline are
 configured in `promotion.config.json` under `lifecycle`.
 
 Set repository secret `PROMOTION_LIFECYCLE_HMAC_KEY` to a long random value.

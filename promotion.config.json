@@ -17,7 +17,6 @@
     "validation_workflow": "promotion_deployment_validation.yml",
     "validation_timeout_hours": 24,
     "validation_environments": {
-      "MASTER": "ReleaseApproval",
       "PSUP": "ReleaseApproval",
       "PROD": "ReleaseApproval"
     }
