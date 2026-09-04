@@ -33,8 +33,8 @@ jobs:
       - name: Record deployment result and request validation
         env:
           GH_HOST: github.kp.org
-          GH_TOKEN: ${{ secrets.PROMOTION_AUTOMATION_TOKEN }}
-          GH_ENTERPRISE_TOKEN: ${{ secrets.PROMOTION_AUTOMATION_TOKEN }}
+          GH_TOKEN: ${{ secrets.REPO_TOKEN }}
+          GH_ENTERPRISE_TOKEN: ${{ secrets.REPO_TOKEN }}
           PROMOTION_LIFECYCLE_HMAC_KEY: ${{ secrets.PROMOTION_LIFECYCLE_HMAC_KEY }}
           PYTHONPATH: ${{ github.workspace }}
         run: python -m promotion.lifecycle deployment-completed

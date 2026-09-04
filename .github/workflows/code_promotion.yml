@@ -74,7 +74,7 @@ jobs:
           INPUT_DEPLOYMENT_TARGET: ${{ inputs.deployment_target }}
           INPUT_STAGING_BRANCH: ${{ github.ref_name }}
           INPUT_RELEASE_DESCRIPTION: ${{ inputs.release_description }}
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.REPO_TOKEN }}
           PROMOTION_LIFECYCLE_HMAC_KEY: ${{ secrets.PROMOTION_LIFECYCLE_HMAC_KEY }}
         run: python -m promotion
 

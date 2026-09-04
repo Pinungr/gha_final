@@ -99,10 +99,8 @@ configured in `promotion.config.json` under `lifecycle`.
 
 Set repository secret `PROMOTION_LIFECYCLE_HMAC_KEY` to a long random value.
 The initial workflow signs its metadata with this secret; continuation workflows
-fail closed for unsigned or forged PR markers. The GitHub Actions token needs
-the workflow permissions declared in each lifecycle YAML. Also set
-`PROMOTION_AUTOMATION_TOKEN` to a GitHub App installation token or approved
-service token with the declared repository permissions. It is used for merges,
+fail closed for unsigned or forged PR markers. `REPO_TOKEN` needs the workflow
+permissions declared in each lifecycle YAML. It is used for merges,
 PR comments, and workflow dispatch so the next event-driven workflow is not
 suppressed as a same-token event. If PSUP/PROD branch rules prevent the final
 synchronization PR from merging, grant only that automation identity a narrowly
