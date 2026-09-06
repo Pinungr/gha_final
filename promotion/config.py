@@ -81,7 +81,6 @@ class Config:
     timestamp_offset: timedelta
     deployment_workflow: str
     validation_workflow: str
-    validation_timeout_hours: int
     validation_environments: dict[str, str]
     _workflow_re: re.Pattern[str]
 
@@ -177,15 +176,6 @@ def _require_offset(raw: object, field: str) -> timedelta:
     return -offset if sign == "-" else offset
 
 
-def _require_positive_int(raw: object, field: str) -> int:
-    if not isinstance(raw, int) or isinstance(raw, bool) or raw <= 0:
-        raise PromotionError(
-            E_BAD_CONFIG,
-            f"{CONFIG_FILENAME}: {field!r} must be a positive integer.",
-        )
-    return raw
-
-
 def load(repo_root: Path, filename: str = CONFIG_FILENAME) -> Config:
     path = repo_root / filename
     try:
@@ -271,10 +261,6 @@ def load(repo_root: Path, filename: str = CONFIG_FILENAME) -> Config:
         lifecycle.get("validation_workflow", "promotion_deployment_validation.yml"),
         "lifecycle.validation_workflow",
     )
-    validation_timeout_hours = _require_positive_int(
-        lifecycle.get("validation_timeout_hours", 24),
-        "lifecycle.validation_timeout_hours",
-    )
     raw_validation_environments = lifecycle.get("validation_environments", {})
     if not isinstance(raw_validation_environments, dict):
         raise PromotionError(
@@ -299,7 +285,6 @@ def load(repo_root: Path, filename: str = CONFIG_FILENAME) -> Config:
         ),
         deployment_workflow=deployment_workflow,
         validation_workflow=validation_workflow,
-        validation_timeout_hours=validation_timeout_hours,
         validation_environments=validation_environments,
         _workflow_re=_glob_to_regex(pattern),
     )

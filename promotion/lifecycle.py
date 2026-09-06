@@ -2,7 +2,7 @@
 
 The promotion engine only prepares the initial Pull Request.  This module owns
 the state carried across later GitHub Actions runs: approval, deployment,
-Environment validation, expiry, and (for PSUP/PROD) final synchronization.
+Environment validation and (for PSUP/PROD) final synchronization.
 State lives in machine-readable PR metadata and PR comments, never in a
 protected application branch.
 """
@@ -18,7 +18,7 @@ import re
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
@@ -42,7 +42,6 @@ class LifecycleState(StrEnum):
     WAITING_FOR_VALIDATION = "WAITING_FOR_VALIDATION"
     VALIDATION_APPROVED = "VALIDATION_APPROVED"
     VALIDATION_REJECTED = "VALIDATION_REJECTED"
-    VALIDATION_EXPIRED = "VALIDATION_EXPIRED"
     ROLLBACK_TRIGGERED = "ROLLBACK_TRIGGERED"
     ROLLBACK_SUCCEEDED = "ROLLBACK_SUCCEEDED"
     ROLLBACK_FAILED = "ROLLBACK_FAILED"
@@ -55,7 +54,6 @@ class LifecycleState(StrEnum):
 TERMINAL_STATES = {
     LifecycleState.DEPLOYMENT_FAILED,
     LifecycleState.VALIDATION_REJECTED,
-    LifecycleState.VALIDATION_EXPIRED,
     LifecycleState.ROLLBACK_SUCCEEDED,
     LifecycleState.ROLLBACK_FAILED,
     LifecycleState.FINAL_PR_MERGED,
@@ -171,19 +169,6 @@ def parse_state(comment: str) -> LifecycleRecord | None:
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
-
-
-def validation_expiry(started_at: datetime, hours: int) -> datetime:
-    return started_at + timedelta(hours=hours)
-
-
-def validation_is_expired(now: datetime, expires_at: datetime) -> bool:
-    """The deadline is exclusive: it is expired at the configured deadline."""
-    return now >= expires_at
-
-
-def can_finalize(state: LifecycleState, now: datetime, expires_at: datetime) -> bool:
-    return state == LifecycleState.WAITING_FOR_VALIDATION and not validation_is_expired(now, expires_at)
 
 
 class GhClient(Protocol):
@@ -442,29 +427,25 @@ def handle_validation_started(client: GhClient, promotion_id: str, number: int, 
             "DEPLOYMENT_SUCCEEDED with a non-empty deployment SHA."
         )
     cfg = config_mod.load(cfg_path)
-    expiry = validation_expiry(_now(), cfg.validation_timeout_hours)
-    _record(client, number, promotion_id, LifecycleState.WAITING_FOR_VALIDATION, expires_at=_iso(expiry), validation_run_id=validation_run_id, validation_run_url=validation_run_url, deployment_sha=deployment_sha)
+    _record(
+        client,
+        number,
+        promotion_id,
+        LifecycleState.WAITING_FOR_VALIDATION,
+        validation_run_id=validation_run_id,
+        validation_run_url=validation_run_url,
+        deployment_sha=deployment_sha,
+    )
     return cfg.validation_environment(target)
 
 
-def handle_validation_approved(client: GhClient, promotion_id: str, number: int, cfg_path: Path) -> None:
+def handle_validation_approved(client: GhClient, promotion_id: str, number: int) -> None:
     pr = client.api(f"repos/{_repo()}/pulls/{number}")
     metadata = _metadata_from_pr(pr)
     if not metadata or metadata.promotion_id != promotion_id:
         return
     state = _latest_record(_comments(client, number), promotion_id)
     if not state or state.state != LifecycleState.WAITING_FOR_VALIDATION:
-        return
-    expires = datetime.fromisoformat(str(state.data["expires_at"]).replace("Z", "+00:00"))
-    if validation_is_expired(_now(), expires):
-        _record(client, number, promotion_id, LifecycleState.VALIDATION_EXPIRED)
-        _request_rollback(
-            client,
-            metadata,
-            number,
-            config_mod.load(cfg_path),
-            "Environment approval arrived after the validation deadline",
-        )
         return
     deployed_sha = str(state.data.get("deployment_sha") or "")
     if not deployed_sha:
@@ -550,31 +531,6 @@ def handle_validation_completed(
         )
 
 
-def handle_timeout(client: GhClient, cfg_path: Path) -> int:
-    """Expire only managed PRs whose validation state has reached its deadline."""
-    cfg = config_mod.load(cfg_path)
-    prs = client.api_all(f"repos/{_repo()}/pulls?state=all&per_page=100")
-    expired = 0
-    for pr in prs:
-        metadata = _metadata_from_pr(pr)
-        if not metadata:
-            continue
-        number = int(pr["number"])
-        state = _latest_record(_comments(client, number), metadata.promotion_id)
-        if not state or state.state != LifecycleState.WAITING_FOR_VALIDATION:
-            continue
-        expires = datetime.fromisoformat(str(state.data["expires_at"]).replace("Z", "+00:00"))
-        if not validation_is_expired(_now(), expires):
-            continue
-        run_id = str(state.data.get("validation_run_id") or "")
-        if run_id:
-            client.command("run", "cancel", run_id, "--repo", _repo())
-        _record(client, number, metadata.promotion_id, LifecycleState.VALIDATION_EXPIRED, reason="No Environment approval within configured validation window")
-        _request_rollback(client, metadata, number, cfg, "Environment validation expired")
-        expired += 1
-    return expired
-
-
 def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m promotion.lifecycle")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -590,9 +546,6 @@ def _main(argv: list[str] | None = None) -> int:
     approved = sub.add_parser("validation-approved")
     approved.add_argument("--promotion-id", required=True)
     approved.add_argument("--initial-pr-number", required=True, type=int)
-    approved.add_argument("--repo-root", default=".")
-    timeout = sub.add_parser("timeout")
-    timeout.add_argument("--repo-root", default=".")
     args = parser.parse_args(argv)
     client = GhCli(_repo())
     if args.command == "initial-approval":
@@ -611,9 +564,7 @@ def _main(argv: list[str] | None = None) -> int:
         environment = handle_validation_started(client, args.promotion_id, args.initial_pr_number, args.environment, args.run_id, args.run_url, Path(args.repo_root))
         print(f"validation_environment={environment}")
     elif args.command == "validation-approved":
-        handle_validation_approved(client, args.promotion_id, args.initial_pr_number, Path(args.repo_root))
-    else:
-        print(f"expired={handle_timeout(client, Path(args.repo_root))}")
+        handle_validation_approved(client, args.promotion_id, args.initial_pr_number)
     return 0
 
 

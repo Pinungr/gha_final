@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -19,13 +18,11 @@ from promotion.lifecycle import (
     handle_validation_approved,
     handle_validation_completed,
     handle_validation_started,
-    handle_timeout,
     metadata_comment,
     metadata_is_authenticated,
     parse_metadata,
     sign_metadata,
     state_comment,
-    validation_is_expired,
 )
 
 
@@ -158,13 +155,6 @@ def test_signed_metadata_cannot_be_forged() -> None:
     assert not metadata_is_authenticated(parsed, "different-secret")
 
 
-def test_exact_validation_deadline_is_expired() -> None:
-    started = datetime(2026, 9, 3, tzinfo=timezone.utc)
-    deadline = started + timedelta(hours=72)
-    assert not validation_is_expired(deadline - timedelta(seconds=1), deadline)
-    assert validation_is_expired(deadline, deadline)
-
-
 def test_zero_approval_never_requests_merge(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
     monkeypatch.setenv("PROMOTION_LIFECYCLE_HMAC_KEY", "secret")
@@ -245,6 +235,7 @@ def test_successful_deployment_starts_validation_once(
 
     assert environment == "ReleaseApproval"
     assert "WAITING_FOR_VALIDATION" in gh.comments[-1]["body"]
+    assert "expires_at" not in gh.comments[-1]["body"]
 
 
 def test_master_deployment_completes_without_validation(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -294,7 +285,7 @@ def test_rejected_psup_validation_dispatches_target_branch_rollback(
                     "run-123",
                     LifecycleState.WAITING_FOR_VALIDATION,
                     "2026-09-03T00:00:00Z",
-                    {"expires_at": "2099-01-01T00:00:00Z", "deployment_sha": "d" * 40},
+                    {"deployment_sha": "d" * 40},
                 )
             )
         }
@@ -317,33 +308,6 @@ def test_rejected_psup_validation_dispatches_target_branch_rollback(
             "-f", "promotion_id=run-123", "-f", "initial_pr_number=41",
         )
     ]
-
-
-def test_expired_prod_validation_dispatches_target_branch_rollback(
-    monkeypatch, tmp_path: Path
-) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
-    monkeypatch.setenv("PROMOTION_LIFECYCLE_HMAC_KEY", "secret")
-    metadata = PromotionMetadata(**{**_metadata().__dict__, "target": "PROD", "release_branch": "release/test_prod", "deployment_branch": "release/test_prod"})
-    gh = RollbackGh(_pr(f"{MANAGED_MARKER}\n{metadata_comment(sign_metadata(metadata, 'secret'))}"), [])
-    gh.comments = [
-        {
-            "body": state_comment(
-                LifecycleRecord(
-                    "run-123",
-                    LifecycleState.WAITING_FOR_VALIDATION,
-                    "2026-09-03T00:00:00Z",
-                    {"expires_at": "2000-01-01T00:00:00Z", "deployment_sha": "d" * 40, "validation_run_id": "88"},
-                )
-            )
-        }
-    ]
-
-    assert handle_timeout(gh, _config(tmp_path)) == 1
-
-    assert "ROLLBACK_TRIGGERED" in gh.comments[-1]["body"]
-    assert ("workflow", "run", "trigger_DBX_WF_management.yaml", "--repo", "owner/repo", "--ref", "prod") in [command[:7] for command in gh.commands]
-    assert any("deployment_action=create/update_repo" in command for command in gh.commands)
 
 
 def test_successful_rollback_is_recorded_without_starting_validation(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -387,8 +351,7 @@ def test_final_merge_is_pinned_to_deployed_sha(monkeypatch) -> None:  # type: ig
     deployed_sha = "d" * 40
     signed = sign_metadata(_metadata(), "secret")
     gh = FakeGh(_pr(f"{MANAGED_MARKER}\n{metadata_comment(signed)}"), [])
-    expires = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat().replace("+00:00", "Z")
-    gh.comments = [{"body": state_comment(LifecycleRecord("run-123", LifecycleState.WAITING_FOR_VALIDATION, "2026-09-03T00:00:00Z", {"expires_at": expires, "deployment_sha": deployed_sha}))}]
+    gh.comments = [{"body": state_comment(LifecycleRecord("run-123", LifecycleState.WAITING_FOR_VALIDATION, "2026-09-03T00:00:00Z", {"deployment_sha": deployed_sha}))}]
 
     original_api = gh.api
     def api(endpoint: str, *, method: str = "GET", fields: dict[str, str] | None = None):  # type: ignore[no-untyped-def]
@@ -405,7 +368,7 @@ def test_final_merge_is_pinned_to_deployed_sha(monkeypatch) -> None:  # type: ig
         return ""
     gh.command = command  # type: ignore[method-assign]
 
-    handle_validation_approved(gh, "run-123", 41, Path("."))
+    handle_validation_approved(gh, "run-123", 41)
 
     merge = next(args for args in gh.commands if args[:2] == ("pr", "merge"))
     assert merge[-2:] == ("--match-head-commit", deployed_sha)
@@ -416,8 +379,7 @@ def test_changed_release_branch_blocks_final_merge(monkeypatch) -> None:  # type
     monkeypatch.setenv("PROMOTION_LIFECYCLE_HMAC_KEY", "secret")
     signed = sign_metadata(_metadata(), "secret")
     gh = FakeGh(_pr(f"{MANAGED_MARKER}\n{metadata_comment(signed)}"), [])
-    expires = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat().replace("+00:00", "Z")
-    gh.comments = [{"body": state_comment(LifecycleRecord("run-123", LifecycleState.WAITING_FOR_VALIDATION, "2026-09-03T00:00:00Z", {"expires_at": expires, "deployment_sha": "d" * 40}))}]
+    gh.comments = [{"body": state_comment(LifecycleRecord("run-123", LifecycleState.WAITING_FOR_VALIDATION, "2026-09-03T00:00:00Z", {"deployment_sha": "d" * 40}))}]
     original_api = gh.api
     def api(endpoint: str, *, method: str = "GET", fields: dict[str, str] | None = None):  # type: ignore[no-untyped-def]
         if "/git/ref/heads/" in endpoint:
@@ -426,7 +388,7 @@ def test_changed_release_branch_blocks_final_merge(monkeypatch) -> None:  # type
     gh.api = api  # type: ignore[method-assign]
 
     with pytest.raises(RuntimeError, match="release branch HEAD"):
-        handle_validation_approved(gh, "run-123", 41, Path("."))
+        handle_validation_approved(gh, "run-123", 41)
 
     assert gh.commands == []
     assert all("VALIDATION_APPROVED" not in item["body"] for item in gh.comments[1:])
