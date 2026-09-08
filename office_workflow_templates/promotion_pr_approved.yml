@@ -60,12 +60,12 @@ jobs:
           git checkout --force -B master FETCH_HEAD
       - name: Verify Org Python
         run: python --version
-      - name: Explain approval wait
+      - name: Explain merge wait
         run: |
           echo "## Waiting for initial Pull Request" >> "$GITHUB_STEP_SUMMARY"
-          echo "Waiting for [PR #${{ inputs.initial_pr_number }}](${{ github.server_url }}/${{ github.repository }}/pull/${{ inputs.initial_pr_number }}) to receive a non-author approval and merge." >> "$GITHUB_STEP_SUMMARY"
+          echo "Requesting normal auto-merge for [PR #${{ inputs.initial_pr_number }}](${{ github.server_url }}/${{ github.repository }}/pull/${{ inputs.initial_pr_number }}) and waiting for GitHub to merge it." >> "$GITHUB_STEP_SUMMARY"
       - id: poll
-        name: Validate approval and wait for actual merge
+        name: Request normal auto-merge and wait for actual merge
         env:
           GH_HOST: github.kp.org
           GH_TOKEN: ${{ secrets.REPO_TOKEN }}

@@ -248,19 +248,6 @@ def _metadata_from_pr(pr: dict[str, Any]) -> PromotionMetadata | None:
     return metadata
 
 
-def _valid_approved_review(reviews: list[dict[str, Any]], author: str) -> bool:
-    """Count a non-author reviewer only when their latest review is APPROVED."""
-    latest: dict[str, dict[str, Any]] = {}
-    for review in reviews:
-        login = str((review.get("user") or {}).get("login") or "")
-        if login:
-            latest[login] = review
-    return any(
-        login != author and str(review.get("state", "")).upper() == "APPROVED"
-        for login, review in latest.items()
-    )
-
-
 def _latest_record(comments: list[dict[str, Any]], promotion_id: str) -> LifecycleRecord | None:
     for comment in reversed(comments):
         record = parse_state(str(comment.get("body") or ""))
@@ -333,7 +320,7 @@ def advance_initial_pr(
     staging_branch: str,
     initial_pr_base: str,
 ) -> InitialPrProgress:
-    """Validate approval, request normal auto-merge, and report actual merge state."""
+    """Request normal auto-merge and report the actual merge state."""
     metadata, pr = _managed_pr(client, promotion_id, number)
     _assert_initial_identity(metadata, pr, staging_branch, initial_pr_base, expected_head_sha)
     if pr.get("merged"):
@@ -344,15 +331,10 @@ def advance_initial_pr(
         )
     if str(pr.get("state") or "open").lower() != "open" or pr.get("draft"):
         raise RuntimeError("initial Pull Request was closed without merging or is still a draft")
-    reviews = client.api(f"repos/{_repo()}/pulls/{number}/reviews") or []
-    author = str((pr.get("user") or {}).get("login") or "")
-    if not _valid_approved_review(reviews, author):
-        _record_once(client, number, promotion_id, LifecycleState.WAITING_FOR_PR_APPROVAL)
-        return InitialPrProgress("waiting")
     current = _latest_record(_comments(client, number), promotion_id)
     if not current or current.state != LifecycleState.INITIAL_PR_APPROVED:
         _record(client, number, promotion_id, LifecycleState.INITIAL_PR_APPROVED)
-        # No --admin and no branch deletion: GitHub protection remains authoritative.
+        # No --admin and no branch deletion: repository protection remains authoritative.
         client.command(
             "pr", "merge", str(number), "--repo", _repo(), "--squash", "--auto",
             "--match-head-commit", _require_sha(expected_head_sha, "initial PR head SHA"),

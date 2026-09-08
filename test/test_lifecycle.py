@@ -169,20 +169,22 @@ def test_signed_metadata_cannot_be_forged() -> None:
     assert not metadata_is_authenticated(parsed, "different-secret")
 
 
-def test_initial_pr_waits_for_non_author_approval(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_initial_pr_requests_merge_without_review(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     _setup(monkeypatch)
-    gh = FakeGh(_pr(), [{"state": "APPROVED", "user": {"login": "author"}}])
+    gh = FakeGh(_pr(), [])
 
     result = advance_initial_pr(gh, "run-123", 41, "b" * 40, "staging/test", "release/test_psup")
 
     assert result.result == "waiting"
-    assert gh.commands == []
-    assert "WAITING_FOR_PR_APPROVAL" in gh.comments[-1]["body"]
+    merges = [command for command in gh.commands if command[:2] == ("pr", "merge")]
+    assert len(merges) == 1
+    assert "--admin" not in merges[0]
+    assert "INITIAL_PR_APPROVED" in gh.comments[-1]["body"]
 
 
 def test_initial_pr_requests_normal_auto_merge_once(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     _setup(monkeypatch)
-    gh = FakeGh(_pr(), [{"state": "APPROVED", "user": {"login": "reviewer"}}])
+    gh = FakeGh(_pr(), [])
 
     first = advance_initial_pr(gh, "run-123", 41, "b" * 40, "staging/test", "release/test_psup")
     second = advance_initial_pr(gh, "run-123", 41, "b" * 40, "staging/test", "release/test_psup")
@@ -208,7 +210,7 @@ def test_initial_pr_reports_actual_merge(monkeypatch) -> None:  # type: ignore[n
 
 def test_changed_initial_pr_sha_blocks_progress(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     _setup(monkeypatch)
-    gh = FakeGh(_pr(), [{"state": "APPROVED", "user": {"login": "reviewer"}}])
+    gh = FakeGh(_pr(), [])
 
     with pytest.raises(RuntimeError, match="head SHA changed"):
         advance_initial_pr(gh, "run-123", 41, OTHER_SHA, "staging/test", "release/test_psup")
