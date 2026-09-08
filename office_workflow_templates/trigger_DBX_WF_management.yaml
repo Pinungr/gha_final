@@ -1,103 +1,98 @@
 name: Trigger DBX WF Management
 
-run-name: "DBX deployment: ${{ inputs.promotion_id || format('manual-{0}', github.run_id) }}"
-
 on:
   workflow_dispatch:
     inputs:
       environment:
-        description: Environment
+        description: "Select Environment"
         required: true
         type: choice
-        options: [MASTER, PSUP, PROD]
-      deployment_action:
-        description: Deployment Action
+        options:
+          - none
+          - uat
+          - psup
+          - prod
+      action:
+        description: "Deployment Action"
         required: true
         type: choice
-        options: [create/update_repo, none, create/update_workflow, delete_workflow, create/update_and_trigger_workflow, trigger_workflow]
-      promotion_id:
-        description: Promotion ID (set automatically; leave blank for a manual run)
-        required: false
-        type: string
-      initial_pr_number:
-        description: Initial promotion PR number (set automatically)
-        required: false
-        type: string
+        options:
+          - none
+          - create/update_repo
+          - create/update_workflow
+          - delete_workflow
+          - create/update_and_trigger_workflow
+          - trigger_workflow
 
-permissions:
-  contents: read
+# Customize the name of the workflow run
+run-name: ${{ github.event.pull_request.title }} ${{ inputs.operation }} on ${{ github.ref }}
 
+# Control concurrency to prevent parallel runs of the same workflow
 concurrency:
-  group: dbx-deployment-${{ inputs.promotion_id || github.run_id }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.ref }}
 
 jobs:
-  context:
-    name: Deployment context
-    runs-on: self-hosted
-    outputs:
-      branch: ${{ steps.context.outputs.branch }}
-    steps:
-      - id: context
-        name: Record dummy deployment context
-        run: |
-          echo "branch=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          {
-            echo "## DBX deployment requested"
-            echo ""
-            echo "| Field | Value |"
-            echo "| --- | --- |"
-            echo "| Promotion ID | \`${{ inputs.promotion_id || format('manual-{0}', github.run_id) }}\` |"
-            echo "| Environment | \`${{ inputs.environment }}\` |"
-            echo "| Branch | \`${{ github.ref_name }}\` |"
-            echo "| Deployment action | \`${{ inputs.deployment_action }}\` |"
-            echo "| Status | Successful dummy no-op |"
-          } >> "$GITHUB_STEP_SUMMARY"
+  init:
+    name: Initialize
+    uses: devsecops/shared-github-actions/.github/workflows/init.yml@master
+    secrets: inherit
+    with:
+      operation: build
 
-  create_or_update_repo:
-    if: inputs.deployment_action == 'create/update_repo'
-    needs: context
-    runs-on: self-hosted
-    steps:
-      - name: Dummy create/update_repo
-        run: 'echo "Dummy deployment: create/update_repo performs no action." >> "$GITHUB_STEP_SUMMARY"'
+  build-stage:
+    name: Build
+    uses: devsecops/shared-github-actions/.github/workflows/build_enterprise.yml@master
+    secrets: inherit
+    needs: [init]
+    with:
+      config-map: ${{ needs.init.outputs.config-build-map }}
+      deployable-artifact: ${{ needs.init.outputs.deployable-artifact }}
+      build-type: ${{ needs.init.outputs.build-type }}
+    if: success()
 
-  create_or_update_workflow:
-    if: inputs.deployment_action == 'create/update_workflow'
-    needs: context
-    runs-on: self-hosted
-    steps:
-      - name: Dummy create/update_workflow
-        run: 'echo "Dummy deployment: create/update_workflow performs no action." >> "$GITHUB_STEP_SUMMARY"'
+  sn-init:
+    name: Trigger Service Now ASR Management
+    if: ${{ inputs.environment == 'psup' }}
+    needs: [build-stage]
+    uses: CSIT/kp-asd-github-actions/.github/workflows/service_now_asr_creation_and_validation.yml@master
+    secrets: inherit
+    with:
+      asr_requested_for: ${{ github.actor }}
 
-  delete_workflow:
-    if: inputs.deployment_action == 'delete_workflow'
-    needs: context
-    runs-on: self-hosted
-    steps:
-      - name: Dummy delete_workflow
-        run: 'echo "Dummy deployment: delete_workflow performs no action." >> "$GITHUB_STEP_SUMMARY"'
+  Execute-DBX-WF-Management-psup:
+    name: Execute DBX WF Management (PSUP)
+    if: ${{ inputs.environment == 'psup' }}
+    needs: [sn-init]
+    uses: CSIT/kp-asd-github-actions/.github/workflows/execute_dbx_wf_management.yml@master
+    with:
+      environment: ${{ inputs.environment }}
+      action: ${{ inputs.action }}
+      repo_url: ${{ github.server_url }}/${{ github.repository }}.git
+      repo_ref: ${{ github.ref }}
+      triggered_by: ${{ github.actor }}
+    secrets: inherit
 
-  create_update_and_trigger_workflow:
-    if: inputs.deployment_action == 'create/update_and_trigger_workflow'
-    needs: context
-    runs-on: self-hosted
-    steps:
-      - name: Dummy create/update_and_trigger_workflow
-        run: 'echo "Dummy deployment: create/update_and_trigger_workflow performs no action." >> "$GITHUB_STEP_SUMMARY"'
+  Execute-DBX-WF-Management-nonpsup:
+    name: Execute DBX WF Management (Non-PSUP)
+    if: ${{ inputs.environment != 'psup' }}
+    needs: [build-stage]
+    uses: CSIT/kp-asd-github-actions/.github/workflows/execute_dbx_wf_management.yml@master
+    with:
+      environment: ${{ inputs.environment }}
+      action: ${{ inputs.action }}
+      repo_url: ${{ github.server_url }}/${{ github.repository }}.git
+      repo_ref: ${{ github.ref }}
+      triggered_by: ${{ github.actor }}
+    secrets: inherit
 
-  trigger_workflow:
-    if: inputs.deployment_action == 'trigger_workflow'
-    needs: context
-    runs-on: self-hosted
-    steps:
-      - name: Dummy trigger_workflow
-        run: 'echo "Dummy deployment: trigger_workflow performs no action." >> "$GITHUB_STEP_SUMMARY"'
-
-  no_operation:
-    if: inputs.deployment_action == 'none'
-    needs: context
-    runs-on: self-hosted
-    steps:
-      - name: Record no-op deployment
-        run: echo "No deployment action was requested." >> "$GITHUB_STEP_SUMMARY"
+  run-close-sctask:
+    name: Invoke Close SCTASK (best effort)
+    if: ${{ always() && inputs.environment == 'psup' && needs.sn-init.result == 'success' }}
+    needs: [sn-init, Execute-DBX-WF-Management-psup]
+    uses: CSIT/kp-asd-github-actions/.github/workflows/service_now_asr_closure.yml@master
+    secrets: inherit
+    with:
+      sctask_number: ${{ needs.sn-init.outputs.sctask_number }}
+      sctask_sys_id: ${{ needs.sn-init.outputs.sctask_sys_id }}
+      close_state: ${{ needs.Execute-DBX-WF-Management-psup.result == 'success' && '3' || '4' }}
+      close_comment: ${{ needs.Execute-DBX-WF-Management-psup.result == 'success' && 'Automation completed successfully.' || 'Automation failed — closing task.' }}

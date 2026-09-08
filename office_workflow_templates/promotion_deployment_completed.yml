@@ -1,23 +1,49 @@
-name: Promotion deployment completion continuation
+name: Promotion deployment verification
 
 on:
-  workflow_run:
-    workflows: [Trigger DBX WF Management]
-    types: [completed]
+  workflow_call:
+    inputs:
+      promotion_id:
+        required: true
+        type: string
+      initial_pr_number:
+        required: true
+        type: string
+      deployment_target:
+        required: true
+        type: string
+      deployment_branch:
+        required: true
+        type: string
+      expected_deployment_sha:
+        required: true
+        type: string
+      actual_deployment_result:
+        required: true
+        type: string
+      actual_deployed_sha:
+        required: true
+        type: string
+    outputs:
+      deployment_verified:
+        value: ${{ jobs.verify.outputs.deployment_verified }}
+      requires_validation:
+        value: ${{ jobs.verify.outputs.requires_validation }}
+      validation_environment:
+        value: ${{ jobs.verify.outputs.validation_environment }}
 
 permissions:
   contents: read
   pull-requests: write
   issues: write
-  actions: write
-
-concurrency:
-  group: promotion-deployment-completed-${{ github.event.workflow_run.id }}
-  cancel-in-progress: false
 
 jobs:
-  handle-deployment-result:
+  verify:
     runs-on: self-hosted
+    outputs:
+      deployment_verified: ${{ steps.verify.outputs.deployment_verified }}
+      requires_validation: ${{ steps.verify.outputs.requires_validation }}
+      validation_environment: ${{ steps.verify.outputs.validation_environment }}
     steps:
       - name: Check out trusted master from internal GitHub
         working-directory: ${{ github.workspace }}
@@ -30,14 +56,24 @@ jobs:
           git checkout --force -B master FETCH_HEAD
       - name: Verify Org Python
         run: python --version
-      - name: Record deployment result and request validation
+      - id: verify
+        name: Verify direct deployment result
         env:
           GH_HOST: github.kp.org
           GH_TOKEN: ${{ secrets.REPO_TOKEN }}
           GH_ENTERPRISE_TOKEN: ${{ secrets.REPO_TOKEN }}
           PROMOTION_LIFECYCLE_HMAC_KEY: ${{ secrets.PROMOTION_LIFECYCLE_HMAC_KEY }}
           PYTHONPATH: ${{ github.workspace }}
-        run: python -m promotion.lifecycle deployment-completed
+        run: |
+          python -m promotion.lifecycle record-deployment-completed \
+            --promotion-id "${{ inputs.promotion_id }}" \
+            --initial-pr-number "${{ inputs.initial_pr_number }}" \
+            --deployment-target "${{ inputs.deployment_target }}" \
+            --deployment-branch "${{ inputs.deployment_branch }}" \
+            --expected-deployment-sha "${{ inputs.expected_deployment_sha }}" \
+            --actual-deployment-result "${{ inputs.actual_deployment_result }}" \
+            --actual-deployed-sha "${{ inputs.actual_deployed_sha }}" \
+            --repo-root .
       - name: Remove Git credential
         if: always()
         run: git remote set-url origin "https://github.kp.org/${GITHUB_REPOSITORY}.git" || true

@@ -1,23 +1,31 @@
 name: Promotion deployment validation
 
-run-name: "Promotion validation: ${{ inputs.promotion_id }}"
-
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       promotion_id:
-        description: Promotion ID (set by automation)
         required: true
         type: string
       initial_pr_number:
-        description: Initial promotion PR number (set by automation)
         required: true
         type: string
-      environment:
-        description: Promotion target (set by automation)
+      deployment_target:
         required: true
-        type: choice
-        options: [MASTER, PSUP, PROD]
+        type: string
+      deployment_branch:
+        required: true
+        type: string
+      deployed_sha:
+        required: true
+        type: string
+      validation_environment:
+        required: true
+        type: string
+    outputs:
+      validation_result:
+        value: ${{ jobs.await-approval.outputs.validation_result }}
+      validated_sha:
+        value: ${{ jobs.await-approval.outputs.validated_sha }}
 
 permissions:
   contents: read
@@ -30,10 +38,7 @@ concurrency:
 
 jobs:
   request-validation:
-    if: inputs.environment == 'PSUP' || inputs.environment == 'PROD'
     runs-on: self-hosted
-    outputs:
-      validation_environment: ${{ steps.prepare.outputs.validation_environment }}
     steps:
       - name: Check out trusted master from internal GitHub
         working-directory: ${{ github.workspace }}
@@ -46,8 +51,7 @@ jobs:
           git checkout --force -B master FETCH_HEAD
       - name: Verify Org Python
         run: python --version
-      - id: prepare
-        name: Request post-deployment validation
+      - name: Record post-deployment validation request
         env:
           GH_HOST: github.kp.org
           GH_TOKEN: ${{ secrets.REPO_TOKEN }}
@@ -58,25 +62,36 @@ jobs:
           python -m promotion.lifecycle validation-started \
             --promotion-id "${{ inputs.promotion_id }}" \
             --initial-pr-number "${{ inputs.initial_pr_number }}" \
-            --environment "${{ inputs.environment }}" \
-            --run-id "${{ github.run_id }}" \
-            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            --repo-root . >> "$GITHUB_OUTPUT"
+            --deployment-target "${{ inputs.deployment_target }}" \
+            --deployment-branch "${{ inputs.deployment_branch }}" \
+            --deployed-sha "${{ inputs.deployed_sha }}" \
+            --validation-environment "${{ inputs.validation_environment }}" \
+            --repo-root .
       - name: Write validation summary
         run: |
-          echo "## Post-deployment validation requested" >> "$GITHUB_STEP_SUMMARY"
-          echo "Promotion ID: ${{ inputs.promotion_id }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "Protection rules: configured required reviewer and wait timer" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## Post-deployment validation requested"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Promotion ID | \`${{ inputs.promotion_id }}\` |"
+            echo "| Target | \`${{ inputs.deployment_target }}\` |"
+            echo "| Deployed SHA | \`${{ inputs.deployed_sha }}\` |"
+            echo "| Environment | \`${{ inputs.validation_environment }}\` |"
+            echo "| Protection rules | Configured required reviewer and wait timer |"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Remove Git credential
         if: always()
         run: git remote set-url origin "https://github.kp.org/${GITHUB_REPOSITORY}.git" || true
 
-  finalize-after-environment-approval:
+  await-approval:
     needs: request-validation
-    if: inputs.environment == 'PSUP' || inputs.environment == 'PROD'
     runs-on: self-hosted
     environment:
-      name: ${{ needs.request-validation.outputs.validation_environment }}
+      name: ${{ inputs.validation_environment }}
+    outputs:
+      validation_result: ${{ steps.approve.outputs.validation_result }}
+      validated_sha: ${{ steps.approve.outputs.validated_sha }}
     steps:
       - name: Check out trusted master from internal GitHub
         working-directory: ${{ github.workspace }}
@@ -89,14 +104,21 @@ jobs:
           git checkout --force -B master FETCH_HEAD
       - name: Verify Org Python
         run: python --version
-      - name: Finalize approved promotion
+      - id: approve
+        name: Verify approved environment validation
         env:
           GH_HOST: github.kp.org
           GH_TOKEN: ${{ secrets.REPO_TOKEN }}
           GH_ENTERPRISE_TOKEN: ${{ secrets.REPO_TOKEN }}
           PROMOTION_LIFECYCLE_HMAC_KEY: ${{ secrets.PROMOTION_LIFECYCLE_HMAC_KEY }}
           PYTHONPATH: ${{ github.workspace }}
-        run: python -m promotion.lifecycle validation-approved --promotion-id "${{ inputs.promotion_id }}" --initial-pr-number "${{ inputs.initial_pr_number }}"
+        run: |
+          python -m promotion.lifecycle validation-approved \
+            --promotion-id "${{ inputs.promotion_id }}" \
+            --initial-pr-number "${{ inputs.initial_pr_number }}" \
+            --deployment-target "${{ inputs.deployment_target }}" \
+            --deployment-branch "${{ inputs.deployment_branch }}" \
+            --deployed-sha "${{ inputs.deployed_sha }}"
       - name: Remove Git credential
         if: always()
         run: git remote set-url origin "https://github.kp.org/${GITHUB_REPOSITORY}.git" || true

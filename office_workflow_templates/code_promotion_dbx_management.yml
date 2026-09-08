@@ -1,0 +1,177 @@
+name: Code Promotion DBX Management
+
+# Automation-owned reusable wrapper. The original manually dispatched
+# trigger_DBX_WF_management.yaml remains unchanged.
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      action:
+        required: true
+        type: string
+      promotion_id:
+        required: true
+        type: string
+      initial_pr_number:
+        required: true
+        type: string
+      deployment_branch:
+        required: true
+        type: string
+      deployment_sha:
+        required: true
+        type: string
+    outputs:
+      deployment_result:
+        value: ${{ jobs.report.outputs.deployment_result }}
+      deployed_sha:
+        value: ${{ jobs.report.outputs.deployed_sha }}
+      deployment_branch:
+        value: ${{ jobs.report.outputs.deployment_branch }}
+
+concurrency:
+  group: dbx-deployment-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  verify-deployment-context:
+    name: Verify exact deployment branch and SHA
+    runs-on: self-hosted
+    steps:
+      - name: Check out trusted master from internal GitHub
+        working-directory: ${{ github.workspace }}
+        env:
+          REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
+        run: |
+          git init
+          git remote add origin "https://${REPO_TOKEN}@github.kp.org/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --prune origin master
+          git checkout --force -B master FETCH_HEAD
+      - name: Verify Org Python
+        run: python --version
+      - name: Verify deployment branch HEAD
+        env:
+          GH_HOST: github.kp.org
+          GH_TOKEN: ${{ secrets.REPO_TOKEN }}
+          GH_ENTERPRISE_TOKEN: ${{ secrets.REPO_TOKEN }}
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python -m promotion.lifecycle verify-deployment-branch \
+            --deployment-branch "${{ inputs.deployment_branch }}" \
+            --deployment-sha "${{ inputs.deployment_sha }}"
+      - name: Remove Git credential
+        if: always()
+        run: git remote set-url origin "https://github.kp.org/${GITHUB_REPOSITORY}.git" || true
+
+  init:
+    name: Initialize
+    uses: devsecops/shared-github-actions/.github/workflows/init.yml@master
+    secrets: inherit
+    with:
+      operation: build
+
+  build-stage:
+    name: Build
+    uses: devsecops/shared-github-actions/.github/workflows/build_enterprise.yml@master
+    secrets: inherit
+    needs: [init]
+    with:
+      config-map: ${{ needs.init.outputs.config-build-map }}
+      deployable-artifact: ${{ needs.init.outputs.deployable-artifact }}
+      build-type: ${{ needs.init.outputs.build-type }}
+    if: success()
+
+  sn-init:
+    name: Trigger Service Now ASR Management
+    if: ${{ inputs.environment == 'psup' }}
+    needs: [build-stage]
+    uses: CSIT/kp-asd-github-actions/.github/workflows/service_now_asr_creation_and_validation.yml@master
+    secrets: inherit
+    with:
+      asr_requested_for: ${{ github.actor }}
+
+  Execute-DBX-WF-Management-psup:
+    name: Execute DBX WF Management (PSUP)
+    if: ${{ inputs.environment == 'psup' }}
+    needs: [sn-init, verify-deployment-context]
+    uses: CSIT/kp-asd-github-actions/.github/workflows/execute_dbx_wf_management.yml@master
+    with:
+      environment: ${{ inputs.environment }}
+      action: ${{ inputs.action }}
+      repo_url: ${{ github.server_url }}/${{ github.repository }}.git
+      repo_ref: ${{ format('refs/heads/{0}', inputs.deployment_branch) }}
+      triggered_by: ${{ github.actor }}
+    secrets: inherit
+
+  Execute-DBX-WF-Management-nonpsup:
+    name: Execute DBX WF Management (Non-PSUP)
+    if: ${{ inputs.environment != 'psup' }}
+    needs: [build-stage, verify-deployment-context]
+    uses: CSIT/kp-asd-github-actions/.github/workflows/execute_dbx_wf_management.yml@master
+    with:
+      environment: ${{ inputs.environment }}
+      action: ${{ inputs.action }}
+      repo_url: ${{ github.server_url }}/${{ github.repository }}.git
+      repo_ref: ${{ format('refs/heads/{0}', inputs.deployment_branch) }}
+      triggered_by: ${{ github.actor }}
+    secrets: inherit
+
+  run-close-sctask:
+    name: Invoke Close SCTASK (best effort)
+    if: ${{ always() && inputs.environment == 'psup' && needs.sn-init.result == 'success' }}
+    needs: [sn-init, Execute-DBX-WF-Management-psup]
+    uses: CSIT/kp-asd-github-actions/.github/workflows/service_now_asr_closure.yml@master
+    secrets: inherit
+    with:
+      sctask_number: ${{ needs.sn-init.outputs.sctask_number }}
+      sctask_sys_id: ${{ needs.sn-init.outputs.sctask_sys_id }}
+      close_state: ${{ needs.Execute-DBX-WF-Management-psup.result == 'success' && '3' || '4' }}
+      close_comment: ${{ needs.Execute-DBX-WF-Management-psup.result == 'success' && 'Automation completed successfully.' || 'Automation failed — closing task.' }}
+
+  report:
+    name: Report Code Promotion DBX result
+    if: always()
+    needs:
+      - verify-deployment-context
+      - init
+      - build-stage
+      - sn-init
+      - Execute-DBX-WF-Management-psup
+      - Execute-DBX-WF-Management-nonpsup
+      - run-close-sctask
+    runs-on: self-hosted
+    outputs:
+      deployment_result: ${{ steps.result.outputs.deployment_result }}
+      deployed_sha: ${{ steps.result.outputs.deployed_sha }}
+      deployment_branch: ${{ steps.result.outputs.deployment_branch }}
+    steps:
+      - id: result
+        name: Return direct deployment result
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          CONTEXT_RESULT: ${{ needs.verify-deployment-context.result }}
+          BUILD_RESULT: ${{ needs.build-stage.result }}
+          SN_RESULT: ${{ needs.sn-init.result }}
+          PSUP_RESULT: ${{ needs.Execute-DBX-WF-Management-psup.result }}
+          NONPSUP_RESULT: ${{ needs.Execute-DBX-WF-Management-nonpsup.result }}
+          DEPLOYMENT_BRANCH: ${{ inputs.deployment_branch }}
+          DEPLOYMENT_SHA: ${{ inputs.deployment_sha }}
+        run: |
+          if [[ "$ENVIRONMENT" == "psup" ]]; then
+            selected="$PSUP_RESULT"
+            required="$SN_RESULT"
+          else
+            selected="$NONPSUP_RESULT"
+            required="$BUILD_RESULT"
+          fi
+          if [[ "$CONTEXT_RESULT" != "success" || "$required" != "success" || "$selected" != "success" ]]; then
+            echo "::error::Code Promotion DBX deployment did not complete successfully."
+            exit 1
+          fi
+          {
+            echo "deployment_result=success"
+            echo "deployed_sha=$DEPLOYMENT_SHA"
+            echo "deployment_branch=$DEPLOYMENT_BRANCH"
+          } >> "$GITHUB_OUTPUT"

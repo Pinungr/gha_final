@@ -73,39 +73,95 @@ Git operations, inventory parsing, Pull Request generation, branch safety, and
 
 ## Approval, deployment, and validation lifecycle
 
-The initial promotion PR carries a signed machine-readable promotion marker.
-After at least one non-author approval, GitHub's own branch protection and
-required-check rules remain authoritative: the automation requests a normal
-non-admin squash auto-merge and waits for the PR's merged event. It never
-approves a PR or bypasses the initial review gate.
+Application users run only `.github/workflows/code_promotion.yml`. The selected
+`Use workflow from` ref is still passed as `${{ github.ref_name }}` and remains
+the user-created staging branch. The parent workflow calls the existing
+workflow files as local reusable workflows, so every lifecycle job appears
+nested beneath the same Code Promotion run. No continuation is started with
+`gh workflow run`, REST dispatch, or `workflow_run`. In the personal test
+repository, Code Promotion continues to call the safe reusable
+`trigger_DBX_WF_management.yaml` stub. The separate DBX workflow design applies
+only to the organization templates.
 
-After that merge, the following workflows continue the lifecycle without a
-runner waiting for people:
+The initial promotion PR carries a signed machine-readable promotion marker.
+The parent requests normal non-admin squash auto-merge immediately and waits
+until GitHub reports the PR actually merged. The automation does not require a
+separate PR review itself, never approves a PR, and never bypasses repository
+branch protection; any review requirement configured in GitHub still applies.
+
+The parent then calls the lifecycle components in this order:
+
+```text
+prepare → initial PR auto-merge/merge → merge verification → deployment
+→ deployment verification → Environment validation (PSUP/PROD)
+→ final PR creation/merge (PSUP/PROD) → summary
+```
+
+The reusable components are:
 
 | Workflow | Purpose |
 | --- | --- |
-| `promotion_pr_approved.yml` | Validates an approval for a signed promotion PR and requests its protected merge. |
-| `promotion_initial_merged.yml` | Dispatches `trigger_DBX_WF_management.yaml` for `master` or the generated release branch. |
-| `trigger_DBX_WF_management.yaml` | Provides the DBX deployment-action structure. Until Databricks commands are supplied, every action is an explicitly logged successful no-op. |
-| `promotion_deployment_completed.yml` | Completes MASTER after deployment; starts post-deployment validation only for PSUP/PROD. |
-| `promotion_deployment_validation.yml` | Uses the configured GitHub Environment required-reviewer gate for PSUP/PROD, then creates a signed final synchronization PR after approval. |
-| `promotion_validation_completed.yml` | On a PSUP/PROD Environment rejection, records it and redeploys the current target branch. |
+| `promotion_pr_approved.yml` | Validates the signed initial PR, requests normal auto-merge, and waits for the actual merge. |
+| `promotion_initial_merged.yml` | Verifies the merged PR identity and exact merge SHA before deployment. |
+| `trigger_DBX_WF_management.yaml` | Personal-repository test stub: supports manual testing and reusable Code Promotion calls without changing external resources. |
+| `promotion_deployment_completed.yml` | Verifies the direct deployment result and exact branch/SHA, then reports whether validation is required. |
+| `promotion_deployment_validation.yml` | Uses the configured GitHub Environment required-reviewer gate for PSUP/PROD. |
+| `promotion_validation_completed.yml` | Creates and waits for the final synchronization PR after validation, or records rejection and prepares a parent-run rollback. |
+
+MASTER skips validation and final synchronization. PSUP and PROD deploy their
+timestamped release branch, require Environment approval, then create and merge
+the final PR into the protected target branch. Release branches are retained.
+For organization use, copy the corresponding file from
+`office_workflow_templates/`. Its original `trigger_DBX_WF_management.yaml`
+remains manually dispatched, continues to offer `uat`, `psup`, and `prod`, and
+passes `github.ref` unchanged. Code Promotion instead calls the automation-owned
+`code_promotion_dbx_management.yml`, which preserves the org DevSecOps,
+ServiceNow, DBX, and SCTASK job flow while accepting the authenticated
+deployment branch and SHA as reusable-workflow inputs. MASTER maps to the
+organization's existing `uat` DBX environment.
 
 Create the GitHub Environment `ReleaseApproval` and configure its required
 reviewers (up to six users or teams, as needed). It is the shared post-deployment
 approval gate for PSUP and PROD. Configure its wait timer and reviewer policy in
 GitHub. The promotion remains paused until those Environment protection rules
 pass; there is no scheduled controller or application-level expiry deadline.
+GitHub Environment approval is platform-controlled and does not provide a
+native 72-hour rejection deadline; configure the Environment wait timer and
+reviewer policy to match the organization’s requirements.
 
-Set repository secret `PROMOTION_LIFECYCLE_HMAC_KEY` to a long random value.
+The initial-PR and final-PR reusable jobs poll GitHub while the parent run is
+active. This repository uses a five-hour polling deadline within the six-hour
+GitHub-hosted job limit. On GitHub Enterprise Server or self-hosted runners,
+verify the supported maximum job duration before increasing
+`approval_timeout_hours` or the final-PR polling deadline.
+
+Set repository secret `PROMOTION_LIFECYCLE_HMAC_KEY` to a random value of at
+least 32 characters.
 The initial workflow signs its metadata with this secret; continuation workflows
-fail closed for unsigned or forged PR markers. `REPO_TOKEN` needs the workflow
-permissions declared in each lifecycle YAML. It is used for merges,
-PR comments, and workflow dispatch so the next event-driven workflow is not
-suppressed as a same-token event. If PSUP/PROD branch rules prevent the final
+fail closed for unsigned or forged PR markers. Set repository secret
+`REPO_TOKEN` to a fine-grained token for this repository with Contents,
+Pull requests, Issues, and Workflows set to read and write (Metadata remains
+read-only). A classic token needs `repo` and, when workflow files can be
+promoted, `workflow`. The workflow checks both secrets and token access before
+it can push a promotion branch. The token is used for protected merges and PR
+comments. If PSUP/PROD branch rules prevent the final
 synchronization PR from merging, grant only that automation identity a narrowly
 scoped bypass for PRs carrying the signed final marker; do not grant that bypass
 to the initial promotion PR.
+
+Code Promotion deployment uses environment-based concurrency
+(`dbx-deployment-${{ inputs.environment }}`), so deployments to the same
+environment are serialized without creating separate workflow runs.
+Because the original manual DBX workflow keeps its existing, different
+concurrency group, operators must not start a manual DBX run for an environment
+while Code Promotion is deploying to that environment.
+
+The enterprise-ready workflow templates are kept in
+`office_workflow_templates/`. They use self-hosted runners and `github.kp.org`
+token handling. Only these organization templates contain the separate
+`code_promotion_dbx_management.yml` adapter, which invokes the real shared
+DevSecOps, ServiceNow, and DBX workflows. The original organization manual DBX
+workflow is retained separately and is not called by Code Promotion.
 
 The automation never supplies a branch-delete option. Ensure the repository's
 automatic head-branch deletion setting is disabled (or exempts `release/*`), so

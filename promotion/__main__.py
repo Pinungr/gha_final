@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import traceback
 from pathlib import Path
@@ -45,11 +46,25 @@ def _append(var: str, text: str) -> None:
 
 
 def _set_outputs(result: PromotionResult) -> None:
+    pr_number = ""
+    match = re.search(r"/pull/(\d+)(?:/)?$", result.pr_url)
+    if match:
+        pr_number = match.group(1)
+    deployment_branch = result.release_branch or result.target_branch
     for key, value in (
+        ("deployment_target", result.environment),
+        ("source_branch", result.source_branch),
+        ("target_branch", result.target_branch),
+        ("staging_branch", result.staging_branch),
+        ("release_branch", result.release_branch or ""),
+        ("deployment_branch", deployment_branch),
+        ("initial_pr_base", deployment_branch),
+        ("initial_pr_number", pr_number),
+        ("initial_pr_url", result.pr_url),
+        ("initial_pr_head_sha", result.commit_sha or ""),
         ("timestamp", result.timestamp),
         ("base_sha", result.base_sha),
         ("temporary_branch", result.staging_branch),
-        ("release_branch", result.release_branch or "Not Applicable"),
         ("commit_sha", result.commit_sha or ""),
         ("pr_url", result.pr_url),
         ("promotion_id", result.promotion_id),
@@ -94,7 +109,7 @@ def _summarise_success(result: PromotionResult) -> None:
         lines += [
             f"Pull Request: {result.pr_url}",
             "",
-            "Squash and merge it once the configured approvals are satisfied.",
+            "The workflow will request normal squash auto-merge and wait for GitHub.",
         ]
     elif result.dry_run:
         lines.append("No branches were pushed and no Pull Request was created.")

@@ -1,112 +1,97 @@
 name: Trigger DBX WF Management
 
-run-name: "DBX deployment: ${{ inputs.promotion_id || format('manual-{0}', github.run_id) }}"
-
+# Personal-repository test stub. This workflow intentionally performs no DBX,
+# ServiceNow, or organization-level operation. The production-ready version is
+# maintained in office_workflow_templates/trigger_DBX_WF_management.yaml.
 on:
   workflow_dispatch:
     inputs:
       environment:
-        description: Environment
+        description: "Select test environment"
         required: true
         type: choice
-        options: [MASTER, PSUP, PROD]
-      deployment_action:
-        description: Deployment Action
+        options: [none, MASTER, PSUP, PROD]
+      action:
+        description: "Test deployment action"
         required: true
         type: choice
-        options: [create/update_repo, none, create/update_workflow, delete_workflow, create/update_and_trigger_workflow, trigger_workflow]
+        options: [none, create/update_repo, create/update_workflow, delete_workflow, create/update_and_trigger_workflow, trigger_workflow]
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      action:
+        required: true
+        type: string
       promotion_id:
-        description: Promotion ID (set automatically; leave blank for a manual run)
         required: false
         type: string
       initial_pr_number:
-        description: Initial promotion PR number (set automatically)
         required: false
         type: string
+      deployment_branch:
+        required: false
+        type: string
+      deployment_sha:
+        required: false
+        type: string
+    outputs:
+      deployment_result:
+        description: Always successful in the personal-repository test stub
+        value: ${{ jobs.test-deployment.outputs.deployment_result }}
+      deployed_sha:
+        description: SHA passed through by the parent workflow
+        value: ${{ jobs.test-deployment.outputs.deployed_sha }}
+      deployment_branch:
+        description: Branch passed through by the parent workflow
+        value: ${{ jobs.test-deployment.outputs.deployment_branch }}
+
+run-name: Test DBX ${{ inputs.environment }} / ${{ inputs.action }} on ${{ github.ref }}
+
+concurrency:
+  group: dbx-deployment-${{ inputs.environment }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
-concurrency:
-  group: dbx-deployment-${{ inputs.promotion_id || github.run_id }}
-  cancel-in-progress: false
-
 jobs:
-  context:
-    name: Deployment context
+  test-deployment:
+    name: Successful DBX test no-op
     runs-on: ubuntu-latest
     outputs:
-      branch: ${{ steps.context.outputs.branch }}
+      deployment_result: ${{ steps.result.outputs.deployment_result }}
+      deployed_sha: ${{ steps.result.outputs.deployed_sha }}
+      deployment_branch: ${{ steps.result.outputs.deployment_branch }}
     steps:
-      - id: context
+      - id: result
+        name: Return successful test result
+        env:
+          TEST_ENVIRONMENT: ${{ inputs.environment }}
+          TEST_ACTION: ${{ inputs.action }}
+          PROMOTION_ID: ${{ inputs.promotion_id }}
+          INITIAL_PR_NUMBER: ${{ inputs.initial_pr_number }}
+          DEPLOYMENT_BRANCH: ${{ inputs.deployment_branch }}
+          DEPLOYMENT_SHA: ${{ inputs.deployment_sha }}
         run: |
-          echo "branch=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
           {
-            echo "## DBX deployment requested"
+            echo "## Personal repository DBX test stub"
+            echo ""
+            echo "No DBX, ServiceNow, or organization resource was changed."
             echo ""
             echo "| Field | Value |"
             echo "| --- | --- |"
-            echo "| Promotion ID | \`${{ inputs.promotion_id || format('manual-{0}', github.run_id) }}\` |"
-            echo "| Environment | \`${{ inputs.environment }}\` |"
-            echo "| Branch | \`${{ github.ref_name }}\` |"
-            echo "| Deployment action | \`${{ inputs.deployment_action }}\` |"
-            echo "| Status | Handler configuration required |"
+            echo "| Environment | \`$TEST_ENVIRONMENT\` |"
+            echo "| Action | \`$TEST_ACTION\` |"
+            echo "| Promotion ID | \`${PROMOTION_ID:-manual}\` |"
+            echo "| Initial PR | \`${INITIAL_PR_NUMBER:-not supplied}\` |"
+            echo "| Deployment branch | \`${DEPLOYMENT_BRANCH:-not supplied}\` |"
+            echo "| Deployment SHA | \`${DEPLOYMENT_SHA:-not supplied}\` |"
+            echo "| Result | \`success\` (test no-op) |"
           } >> "$GITHUB_STEP_SUMMARY"
-
-  create_or_update_repo:
-    if: inputs.deployment_action == 'create/update_repo'
-    needs: context
-    runs-on: ubuntu-latest
-    steps:
-      - name: Await create/update_repo implementation
-        run: |
-          echo "Dummy deployment: create/update_repo intentionally performs no action."
-          echo "Status: successful no-op" >> "$GITHUB_STEP_SUMMARY"
-
-  create_or_update_workflow:
-    if: inputs.deployment_action == 'create/update_workflow'
-    needs: context
-    runs-on: ubuntu-latest
-    steps:
-      - name: Await create/update_workflow implementation
-        run: |
-          echo "Dummy deployment: create/update_workflow intentionally performs no action."
-          echo "Status: successful no-op" >> "$GITHUB_STEP_SUMMARY"
-
-  delete_workflow:
-    if: inputs.deployment_action == 'delete_workflow'
-    needs: context
-    runs-on: ubuntu-latest
-    steps:
-      - name: Await delete_workflow implementation
-        run: |
-          echo "Dummy deployment: delete_workflow intentionally performs no action."
-          echo "Status: successful no-op" >> "$GITHUB_STEP_SUMMARY"
-
-  create_update_and_trigger_workflow:
-    if: inputs.deployment_action == 'create/update_and_trigger_workflow'
-    needs: context
-    runs-on: ubuntu-latest
-    steps:
-      - name: Await create/update_and_trigger_workflow implementation
-        run: |
-          echo "Dummy deployment: create/update_and_trigger_workflow intentionally performs no action."
-          echo "Status: successful no-op" >> "$GITHUB_STEP_SUMMARY"
-
-  trigger_workflow:
-    if: inputs.deployment_action == 'trigger_workflow'
-    needs: context
-    runs-on: ubuntu-latest
-    steps:
-      - name: Await trigger_workflow implementation
-        run: |
-          echo "Dummy deployment: trigger_workflow intentionally performs no action."
-          echo "Status: successful no-op" >> "$GITHUB_STEP_SUMMARY"
-
-  no_operation:
-    if: inputs.deployment_action == 'none'
-    needs: context
-    runs-on: ubuntu-latest
-    steps:
-      - name: Record no-op deployment
-        run: echo "No deployment action was requested." >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "deployment_result=success"
+            echo "deployed_sha=$DEPLOYMENT_SHA"
+            echo "deployment_branch=$DEPLOYMENT_BRANCH"
+          } >> "$GITHUB_OUTPUT"
