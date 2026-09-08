@@ -1,148 +1,181 @@
 name: Trigger DBX WF Management
 
 on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Select Environment"
+        required: true
+        type: choice
+        options:
+          - none
+          - uat
+          - psup
+          - prod
+      action:
+        description: "Deployment Action"
+        required: true
+        type: choice
+        options:
+          - none
+          - create/update_repo
+          - create/update_workflow
+          - delete_workflow
+          - create/update_and_trigger_workflow
+          - trigger_workflow
   workflow_call:
     inputs:
       environment:
         required: true
         type: string
-      deployment_action:
+      action:
         required: true
         type: string
       promotion_id:
-        required: true
+        required: false
         type: string
       initial_pr_number:
-        required: true
+        required: false
         type: string
       deployment_branch:
-        required: true
+        required: false
         type: string
       deployment_sha:
-        required: true
+        required: false
         type: string
     outputs:
       deployment_result:
+        description: Direct result of the selected DBX action
         value: ${{ jobs.report.outputs.deployment_result }}
       deployed_sha:
+        description: Exact SHA supplied to the deployment
         value: ${{ jobs.report.outputs.deployed_sha }}
       deployment_branch:
+        description: Exact branch supplied to the deployment
         value: ${{ jobs.report.outputs.deployment_branch }}
 
-permissions:
-  contents: read
+# Customize the name of the workflow run for both manual and reusable calls.
+run-name: DBX ${{ inputs.environment }} / ${{ inputs.action }} on ${{ github.ref }}
 
+# Serialize deployments by target environment, including parent-run rollback.
 concurrency:
   group: dbx-deployment-${{ inputs.environment }}
   cancel-in-progress: false
 
 jobs:
-  context:
-    name: Verify deployment context
+  verify-deployment-context:
+    name: Verify exact deployment branch and SHA
     runs-on: ubuntu-latest
     outputs:
       deployment_branch: ${{ steps.verify.outputs.deployment_branch }}
       deployment_sha: ${{ steps.verify.outputs.deployed_sha }}
     steps:
       - name: Check out trusted promotion automation
+        if: inputs.deployment_branch != '' && inputs.deployment_sha != ''
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: master
           fetch-depth: 1
       - name: Set up Python
+        if: inputs.deployment_branch != '' && inputs.deployment_sha != ''
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.12"
       - id: verify
-        name: Verify exact deployment branch and SHA
+        name: Verify deployment branch HEAD
         env:
           GH_TOKEN: ${{ github.token }}
+          DEPLOYMENT_BRANCH: ${{ inputs.deployment_branch }}
+          DEPLOYMENT_SHA: ${{ inputs.deployment_sha }}
         run: |
+          if [[ -z "$DEPLOYMENT_BRANCH" || -z "$DEPLOYMENT_SHA" ]]; then
+            echo "deployment_branch=" >> "$GITHUB_OUTPUT"
+            echo "deployed_sha=" >> "$GITHUB_OUTPUT"
+            echo "Manual dispatch: no promotion branch/SHA was supplied."
+            exit 0
+          fi
           python -m promotion.lifecycle verify-deployment-branch \
-            --deployment-branch "${{ inputs.deployment_branch }}" \
-            --deployment-sha "${{ inputs.deployment_sha }}"
-      - name: Write deployment summary
-        run: |
-          {
-            echo "## DBX deployment requested"
-            echo ""
-            echo "| Field | Value |"
-            echo "| --- | --- |"
-            echo "| Promotion ID | \`${{ inputs.promotion_id }}\` |"
-            echo "| Environment | \`${{ inputs.environment }}\` |"
-            echo "| Branch | \`${{ inputs.deployment_branch }}\` |"
-            echo "| SHA | \`${{ inputs.deployment_sha }}\` |"
-            echo "| Deployment action | \`${{ inputs.deployment_action }}\` |"
-          } >> "$GITHUB_STEP_SUMMARY"
+            --deployment-branch "$DEPLOYMENT_BRANCH" \
+            --deployment-sha "$DEPLOYMENT_SHA"
 
-  create_or_update_repo:
-    if: inputs.deployment_action == 'create/update_repo'
-    needs: context
-    runs-on: ubuntu-latest
-    steps:
-      - name: Await create/update_repo implementation
-        run: |
-          echo "Dummy deployment: create/update_repo intentionally performs no action."
-          echo "Status: successful no-op" >> "$GITHUB_STEP_SUMMARY"
+  init:
+    name: Initialize
+    uses: devsecops/shared-github-actions/.github/workflows/init.yml@master
+    secrets: inherit
+    with:
+      operation: build
 
-  create_or_update_workflow:
-    if: inputs.deployment_action == 'create/update_workflow'
-    needs: context
-    runs-on: ubuntu-latest
-    steps:
-      - name: Await create/update_workflow implementation
-        run: |
-          echo "Dummy deployment: create/update_workflow intentionally performs no action."
-          echo "Status: successful no-op" >> "$GITHUB_STEP_SUMMARY"
+  build-stage:
+    name: Build
+    uses: devsecops/shared-github-actions/.github/workflows/build_enterprise.yml@master
+    secrets: inherit
+    needs: [init]
+    with:
+      config-map: ${{ needs.init.outputs['config-build-map'] }}
+      deployable-artifact: ${{ needs.init.outputs['deployable-artifact'] }}
+      build-type: ${{ needs.init.outputs['build-type'] }}
+    if: success()
 
-  delete_workflow:
-    if: inputs.deployment_action == 'delete_workflow'
-    needs: context
-    runs-on: ubuntu-latest
-    steps:
-      - name: Await delete_workflow implementation
-        run: |
-          echo "Dummy deployment: delete_workflow intentionally performs no action."
-          echo "Status: successful no-op" >> "$GITHUB_STEP_SUMMARY"
+  sn-init:
+    name: Trigger Service Now ASR Management
+    if: ${{ inputs.environment == 'psup' || inputs.environment == 'PSUP' }}
+    needs: [build-stage]
+    uses: CSIT/kp-asd-github-actions/.github/workflows/service_now_asr_creation_and_validation.yml@master
+    secrets: inherit
+    with:
+      asr_requested_for: ${{ github.actor }}
 
-  create_update_and_trigger_workflow:
-    if: inputs.deployment_action == 'create/update_and_trigger_workflow'
-    needs: context
-    runs-on: ubuntu-latest
-    steps:
-      - name: Await create/update_and_trigger_workflow implementation
-        run: |
-          echo "Dummy deployment: create/update_and_trigger_workflow intentionally performs no action."
-          echo "Status: successful no-op" >> "$GITHUB_STEP_SUMMARY"
+  Execute-DBX-WF-Management-psup:
+    name: Execute DBX WF Management (PSUP)
+    if: ${{ inputs.environment == 'psup' || inputs.environment == 'PSUP' }}
+    needs: [sn-init, verify-deployment-context]
+    uses: CSIT/kp-asd-github-actions/.github/workflows/execute_dbx_wf_management.yml@master
+    with:
+      environment: psup
+      action: ${{ inputs.action }}
+      repo_url: ${{ github.server_url }}/${{ github.repository }}.git
+      repo_ref: ${{ inputs.deployment_branch != '' && format('refs/heads/{0}', inputs.deployment_branch) || github.ref }}
+      triggered_by: ${{ github.actor }}
+    secrets: inherit
 
-  trigger_workflow:
-    if: inputs.deployment_action == 'trigger_workflow'
-    needs: context
-    runs-on: ubuntu-latest
-    steps:
-      - name: Await trigger_workflow implementation
-        run: |
-          echo "Dummy deployment: trigger_workflow intentionally performs no action."
-          echo "Status: successful no-op" >> "$GITHUB_STEP_SUMMARY"
+  Execute-DBX-WF-Management-nonpsup:
+    name: Execute DBX WF Management (Non-PSUP)
+    if: ${{ inputs.environment != 'psup' && inputs.environment != 'PSUP' }}
+    needs: [build-stage, verify-deployment-context]
+    uses: CSIT/kp-asd-github-actions/.github/workflows/execute_dbx_wf_management.yml@master
+    with:
+      # The promotion engine calls the master route MASTER; the org DBX
+      # implementation names that deployable environment uat.
+      environment: ${{ (inputs.environment == 'MASTER' && 'uat') || (inputs.environment == 'PROD' && 'prod') || inputs.environment }}
+      action: ${{ inputs.action }}
+      repo_url: ${{ github.server_url }}/${{ github.repository }}.git
+      repo_ref: ${{ inputs.deployment_branch != '' && format('refs/heads/{0}', inputs.deployment_branch) || github.ref }}
+      triggered_by: ${{ github.actor }}
+    secrets: inherit
 
-  no_operation:
-    if: inputs.deployment_action == 'none'
-    needs: context
-    runs-on: ubuntu-latest
-    steps:
-      - name: Record no-op deployment
-        run: echo "No deployment action was requested." >> "$GITHUB_STEP_SUMMARY"
+  run-close-sctask:
+    name: Invoke Close SCTASK (best effort)
+    if: ${{ always() && (inputs.environment == 'psup' || inputs.environment == 'PSUP') && needs.sn-init.result == 'success' }}
+    needs: [sn-init, Execute-DBX-WF-Management-psup]
+    uses: CSIT/kp-asd-github-actions/.github/workflows/service_now_asr_closure.yml@master
+    secrets: inherit
+    with:
+      sctask_number: ${{ needs.sn-init.outputs.sctask_number }}
+      sctask_sys_id: ${{ needs.sn-init.outputs.sctask_sys_id }}
+      close_state: ${{ needs['Execute-DBX-WF-Management-psup'].result == 'success' && '3' || '4' }}
+      close_comment: ${{ needs['Execute-DBX-WF-Management-psup'].result == 'success' && 'Automation completed successfully.' || 'Automation failed — closing task.' }}
 
   report:
+    name: Report deployment result
     if: always()
     needs:
-      - context
-      - create_or_update_repo
-      - create_or_update_workflow
-      - delete_workflow
-      - create_update_and_trigger_workflow
-      - trigger_workflow
-      - no_operation
+      - verify-deployment-context
+      - init
+      - build-stage
+      - sn-init
+      - Execute-DBX-WF-Management-psup
+      - Execute-DBX-WF-Management-nonpsup
+      - run-close-sctask
     runs-on: ubuntu-latest
     outputs:
       deployment_result: ${{ steps.result.outputs.deployment_result }}
@@ -152,30 +185,28 @@ jobs:
       - id: result
         name: Return direct deployment result
         env:
-          ACTION: ${{ inputs.deployment_action }}
-          CONTEXT_RESULT: ${{ needs.context.result }}
-          REPO_RESULT: ${{ needs.create_or_update_repo.result }}
-          WORKFLOW_RESULT: ${{ needs.create_or_update_workflow.result }}
-          DELETE_RESULT: ${{ needs.delete_workflow.result }}
-          UPDATE_TRIGGER_RESULT: ${{ needs.create_update_and_trigger_workflow.result }}
-          TRIGGER_RESULT: ${{ needs.trigger_workflow.result }}
-          NONE_RESULT: ${{ needs.no_operation.result }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          DEPLOYMENT_SHA: ${{ inputs.deployment_sha }}
+          DEPLOYMENT_BRANCH: ${{ inputs.deployment_branch }}
+          CONTEXT_RESULT: ${{ needs.verify-deployment-context.result }}
+          BUILD_RESULT: ${{ needs.build-stage.result }}
+          PSUP_RESULT: ${{ needs['Execute-DBX-WF-Management-psup'].result }}
+          NONPSUP_RESULT: ${{ needs['Execute-DBX-WF-Management-nonpsup'].result }}
+          SN_RESULT: ${{ needs.sn-init.result }}
         run: |
-          case "$ACTION" in
-            create/update_repo) selected="$REPO_RESULT" ;;
-            create/update_workflow) selected="$WORKFLOW_RESULT" ;;
-            delete_workflow) selected="$DELETE_RESULT" ;;
-            create/update_and_trigger_workflow) selected="$UPDATE_TRIGGER_RESULT" ;;
-            trigger_workflow) selected="$TRIGGER_RESULT" ;;
-            none) selected="$NONE_RESULT" ;;
-            *) echo "::error::Unsupported deployment action: $ACTION"; exit 1 ;;
-          esac
-          if [[ "$CONTEXT_RESULT" != "success" || "$selected" != "success" ]]; then
-            echo "::error::Deployment did not complete successfully."
+          if [[ "$ENVIRONMENT" == "psup" || "$ENVIRONMENT" == "PSUP" ]]; then
+            selected="$PSUP_RESULT"
+            required="$SN_RESULT"
+          else
+            selected="$NONPSUP_RESULT"
+            required="$BUILD_RESULT"
+          fi
+          if [[ "$CONTEXT_RESULT" != "success" || "$required" != "success" || "$selected" != "success" ]]; then
+            echo "::error::DBX deployment did not complete successfully."
             exit 1
           fi
           {
             echo "deployment_result=success"
-            echo "deployed_sha=${{ inputs.deployment_sha }}"
-            echo "deployment_branch=${{ inputs.deployment_branch }}"
+            echo "deployed_sha=$DEPLOYMENT_SHA"
+            echo "deployment_branch=$DEPLOYMENT_BRANCH"
           } >> "$GITHUB_OUTPUT"

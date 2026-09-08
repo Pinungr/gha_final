@@ -125,7 +125,7 @@ jobs:
     uses: ./.github/workflows/trigger_DBX_WF_management.yaml
     with:
       environment: ${{ needs.process-initial-merge.outputs.deployment_target }}
-      deployment_action: ${{ needs.process-initial-merge.outputs.deployment_action }}
+      action: ${{ needs.process-initial-merge.outputs.deployment_action }}
       promotion_id: ${{ needs.prepare-promotion.outputs.promotion_id }}
       initial_pr_number: ${{ needs.prepare-promotion.outputs.initial_pr_number }}
       deployment_branch: ${{ needs.process-initial-merge.outputs.deployment_branch }}
@@ -177,7 +177,7 @@ jobs:
     uses: ./.github/workflows/trigger_DBX_WF_management.yaml
     with:
       environment: ${{ needs.process-validation-result.outputs.rollback_target }}
-      deployment_action: create/update_repo
+      action: create/update_repo
       promotion_id: ${{ needs.prepare-promotion.outputs.promotion_id }}
       initial_pr_number: ${{ needs.prepare-promotion.outputs.initial_pr_number }}
       deployment_branch: ${{ needs.process-validation-result.outputs.rollback_branch }}

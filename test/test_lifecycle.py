@@ -402,7 +402,8 @@ def test_reusable_workflow_interfaces_and_parent_graph() -> None:
     ):
         text = (workflow_dir / child).read_text(encoding="utf-8")
         assert "workflow_call:" in text
-        assert "workflow_dispatch:" not in text
+        if child != "trigger_DBX_WF_management.yaml":
+            assert "workflow_dispatch:" not in text
         assert "workflow_run:" not in text
         assert "pull_request_review:" not in text
         assert "pull_request:" not in text
@@ -456,7 +457,8 @@ def test_enterprise_templates_match_reusable_contract() -> None:
         child_text = (template_dir / child).read_text(encoding="utf-8")
         assert "workflow_call:" in child_text
         assert "runs-on: self-hosted" in child_text
-        assert "workflow_dispatch:" not in child_text
+        if child != "trigger_DBX_WF_management.yaml":
+            assert "workflow_dispatch:" not in child_text
     assert "environment:\n      name: ${{ inputs.validation_environment }}" in (
         template_dir / "promotion_deployment_validation.yml"
     ).read_text(encoding="utf-8")
@@ -466,6 +468,10 @@ def test_enterprise_templates_match_reusable_contract() -> None:
 def test_deployment_uses_same_environment_concurrency() -> None:
     text = Path(".github/workflows/trigger_DBX_WF_management.yaml").read_text(encoding="utf-8")
     assert "group: dbx-deployment-${{ inputs.environment }}" in text
+    assert "workflow_dispatch:" in text
+    assert "workflow_call:" in text
+    assert "      action:" in text
+    assert "inputs.environment == 'MASTER' && 'uat'" in text
 
 
 def test_obsolete_timeout_workflow_is_removed() -> None:
