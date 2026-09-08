@@ -1,1 +1,5 @@
-
+{
+  "test": "code-promotion-e2e",
+  "target": "PSUP",
+  "date": "2026-09-09"
+}
