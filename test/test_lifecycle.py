@@ -456,7 +456,8 @@ def test_enterprise_templates_match_reusable_contract() -> None:
     ):
         child_text = (template_dir / child).read_text(encoding="utf-8")
         assert "workflow_call:" in child_text
-        assert "runs-on: self-hosted" in child_text
+        if child != "trigger_DBX_WF_management.yaml":
+            assert "runs-on: self-hosted" in child_text
         if child != "trigger_DBX_WF_management.yaml":
             assert "workflow_dispatch:" not in child_text
     assert "environment:\n      name: ${{ inputs.validation_environment }}" in (
@@ -477,11 +478,18 @@ def test_deployment_uses_same_environment_concurrency() -> None:
 
 
 def test_office_deployment_template_keeps_org_integrations() -> None:
-    text = Path("office_workflow_templates/trigger_DBX_WF_management.yaml").read_text(encoding="utf-8")
-    assert "inputs.environment == 'MASTER' && 'uat'" in text
-    assert "execute_dbx_wf_management.yml@master" in text
-    assert "service_now_asr_creation_and_validation.yml@master" in text
-    assert "service_now_asr_closure.yml@master" in text
+    template = Path("office_workflow_templates/trigger_DBX_WF_management.yaml").read_text(encoding="utf-8")
+    parent = Path("office_workflow_templates/code_promotion.yml").read_text(encoding="utf-8")
+    assert "          - master" in template
+    assert "          - uat" not in template
+    assert "repo_ref: ${{ inputs.repo_ref || github.ref }}" in template
+    assert "outputs:" not in template
+    assert "automation-result:" not in template
+    assert "== 'MASTER' && 'master'" in parent
+    assert "actual_deployment_result: ${{ needs.deploy.result }}" in parent
+    assert "execute_dbx_wf_management.yml@master" in template
+    assert "service_now_asr_creation_and_validation.yml@master" in template
+    assert "service_now_asr_closure.yml@master" in template
 
 
 def test_obsolete_timeout_workflow_is_removed() -> None:

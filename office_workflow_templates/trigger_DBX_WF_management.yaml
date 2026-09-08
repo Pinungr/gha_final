@@ -7,12 +7,22 @@ on:
         description: "Select Environment"
         required: true
         type: choice
-        options: [none, uat, psup, prod]
+        options:
+          - none
+          - master
+          - psup
+          - prod
       action:
         description: "Deployment Action"
         required: true
         type: choice
-        options: [none, create/update_repo, create/update_workflow, delete_workflow, create/update_and_trigger_workflow, trigger_workflow]
+        options:
+          - none
+          - create/update_repo
+          - create/update_workflow
+          - delete_workflow
+          - create/update_and_trigger_workflow
+          - trigger_workflow
   workflow_call:
     inputs:
       environment:
@@ -21,76 +31,18 @@ on:
       action:
         required: true
         type: string
-      promotion_id:
-        required: false
+      repo_ref:
+        required: true
         type: string
-      initial_pr_number:
-        required: false
-        type: string
-      deployment_branch:
-        required: false
-        type: string
-      deployment_sha:
-        required: false
-        type: string
-    outputs:
-      deployment_result:
-        value: ${{ jobs.report.outputs.deployment_result }}
-      deployed_sha:
-        value: ${{ jobs.report.outputs.deployed_sha }}
-      deployment_branch:
-        value: ${{ jobs.report.outputs.deployment_branch }}
 
-run-name: DBX ${{ inputs.environment }} / ${{ inputs.action }} on ${{ github.ref }}
+# Customize the name of the workflow run
+run-name: ${{ github.event.pull_request.title }} ${{ inputs.operation }} on ${{ github.ref }}
 
+# Control concurrency to prevent parallel runs of the same workflow
 concurrency:
-  group: dbx-deployment-${{ inputs.environment }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.ref }}
 
 jobs:
-  verify-deployment-context:
-    name: Verify exact deployment branch and SHA
-    runs-on: self-hosted
-    outputs:
-      deployment_branch: ${{ steps.verify.outputs.deployment_branch }}
-      deployment_sha: ${{ steps.verify.outputs.deployed_sha }}
-    steps:
-      - name: Check out trusted master from internal GitHub
-        if: inputs.deployment_branch != '' && inputs.deployment_sha != ''
-        working-directory: ${{ github.workspace }}
-        env:
-          REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
-        run: |
-          git init
-          git remote add origin "https://${REPO_TOKEN}@github.kp.org/${GITHUB_REPOSITORY}.git"
-          git fetch --no-tags --prune origin master
-          git checkout --force -B master FETCH_HEAD
-      - name: Verify Org Python
-        if: inputs.deployment_branch != '' && inputs.deployment_sha != ''
-        run: python --version
-      - id: verify
-        name: Verify deployment branch HEAD
-        env:
-          GH_HOST: github.kp.org
-          GH_TOKEN: ${{ secrets.REPO_TOKEN }}
-          GH_ENTERPRISE_TOKEN: ${{ secrets.REPO_TOKEN }}
-          DEPLOYMENT_BRANCH: ${{ inputs.deployment_branch }}
-          DEPLOYMENT_SHA: ${{ inputs.deployment_sha }}
-          PYTHONPATH: ${{ github.workspace }}
-        run: |
-          if [[ -z "$DEPLOYMENT_BRANCH" || -z "$DEPLOYMENT_SHA" ]]; then
-            echo "deployment_branch=" >> "$GITHUB_OUTPUT"
-            echo "deployed_sha=" >> "$GITHUB_OUTPUT"
-            echo "Manual dispatch: no promotion branch/SHA was supplied."
-            exit 0
-          fi
-          python -m promotion.lifecycle verify-deployment-branch \
-            --deployment-branch "$DEPLOYMENT_BRANCH" \
-            --deployment-sha "$DEPLOYMENT_SHA"
-      - name: Remove Git credential
-        if: always()
-        run: git remote set-url origin "https://github.kp.org/${GITHUB_REPOSITORY}.git" || true
-
   init:
     name: Initialize
     uses: devsecops/shared-github-actions/.github/workflows/init.yml@master
@@ -104,14 +56,14 @@ jobs:
     secrets: inherit
     needs: [init]
     with:
-      config-map: ${{ needs.init.outputs['config-build-map'] }}
-      deployable-artifact: ${{ needs.init.outputs['deployable-artifact'] }}
-      build-type: ${{ needs.init.outputs['build-type'] }}
+      config-map: ${{ needs.init.outputs.config-build-map }}
+      deployable-artifact: ${{ needs.init.outputs.deployable-artifact }}
+      build-type: ${{ needs.init.outputs.build-type }}
     if: success()
 
   sn-init:
     name: Trigger Service Now ASR Management
-    if: ${{ inputs.environment == 'psup' || inputs.environment == 'PSUP' }}
+    if: ${{ inputs.environment == 'psup' }}
     needs: [build-stage]
     uses: CSIT/kp-asd-github-actions/.github/workflows/service_now_asr_creation_and_validation.yml@master
     secrets: inherit
@@ -120,77 +72,38 @@ jobs:
 
   Execute-DBX-WF-Management-psup:
     name: Execute DBX WF Management (PSUP)
-    if: ${{ inputs.environment == 'psup' || inputs.environment == 'PSUP' }}
-    needs: [sn-init, verify-deployment-context]
+    if: ${{ inputs.environment == 'psup' }}
+    needs: [sn-init]
     uses: CSIT/kp-asd-github-actions/.github/workflows/execute_dbx_wf_management.yml@master
     with:
-      environment: psup
+      environment: ${{ inputs.environment }}
       action: ${{ inputs.action }}
       repo_url: ${{ github.server_url }}/${{ github.repository }}.git
-      repo_ref: ${{ inputs.deployment_branch != '' && format('refs/heads/{0}', inputs.deployment_branch) || github.ref }}
+      repo_ref: ${{ inputs.repo_ref || github.ref }}
       triggered_by: ${{ github.actor }}
     secrets: inherit
 
   Execute-DBX-WF-Management-nonpsup:
     name: Execute DBX WF Management (Non-PSUP)
-    if: ${{ inputs.environment != 'psup' && inputs.environment != 'PSUP' }}
-    needs: [build-stage, verify-deployment-context]
+    if: ${{ inputs.environment != 'psup' }}
+    needs: [build-stage]
     uses: CSIT/kp-asd-github-actions/.github/workflows/execute_dbx_wf_management.yml@master
     with:
-      environment: ${{ (inputs.environment == 'MASTER' && 'uat') || (inputs.environment == 'PROD' && 'prod') || inputs.environment }}
+      environment: ${{ inputs.environment }}
       action: ${{ inputs.action }}
       repo_url: ${{ github.server_url }}/${{ github.repository }}.git
-      repo_ref: ${{ inputs.deployment_branch != '' && format('refs/heads/{0}', inputs.deployment_branch) || github.ref }}
+      repo_ref: ${{ inputs.repo_ref || github.ref }}
       triggered_by: ${{ github.actor }}
     secrets: inherit
 
   run-close-sctask:
     name: Invoke Close SCTASK (best effort)
-    if: ${{ always() && (inputs.environment == 'psup' || inputs.environment == 'PSUP') && needs.sn-init.result == 'success' }}
+    if: ${{ always() && inputs.environment == 'psup' && needs.sn-init.result == 'success' }}
     needs: [sn-init, Execute-DBX-WF-Management-psup]
     uses: CSIT/kp-asd-github-actions/.github/workflows/service_now_asr_closure.yml@master
     secrets: inherit
     with:
       sctask_number: ${{ needs.sn-init.outputs.sctask_number }}
       sctask_sys_id: ${{ needs.sn-init.outputs.sctask_sys_id }}
-      close_state: ${{ needs['Execute-DBX-WF-Management-psup'].result == 'success' && '3' || '4' }}
-      close_comment: ${{ needs['Execute-DBX-WF-Management-psup'].result == 'success' && 'Automation completed successfully.' || 'Automation failed — closing task.' }}
-
-  report:
-    name: Report deployment result
-    if: always()
-    needs: [verify-deployment-context, init, build-stage, sn-init, Execute-DBX-WF-Management-psup, Execute-DBX-WF-Management-nonpsup, run-close-sctask]
-    runs-on: self-hosted
-    outputs:
-      deployment_result: ${{ steps.result.outputs.deployment_result }}
-      deployed_sha: ${{ steps.result.outputs.deployed_sha }}
-      deployment_branch: ${{ steps.result.outputs.deployment_branch }}
-    steps:
-      - id: result
-        name: Return direct deployment result
-        env:
-          ENVIRONMENT: ${{ inputs.environment }}
-          DEPLOYMENT_SHA: ${{ inputs.deployment_sha }}
-          DEPLOYMENT_BRANCH: ${{ inputs.deployment_branch }}
-          CONTEXT_RESULT: ${{ needs.verify-deployment-context.result }}
-          BUILD_RESULT: ${{ needs.build-stage.result }}
-          PSUP_RESULT: ${{ needs['Execute-DBX-WF-Management-psup'].result }}
-          NONPSUP_RESULT: ${{ needs['Execute-DBX-WF-Management-nonpsup'].result }}
-          SN_RESULT: ${{ needs.sn-init.result }}
-        run: |
-          if [[ "$ENVIRONMENT" == "psup" || "$ENVIRONMENT" == "PSUP" ]]; then
-            selected="$PSUP_RESULT"
-            required="$SN_RESULT"
-          else
-            selected="$NONPSUP_RESULT"
-            required="$BUILD_RESULT"
-          fi
-          if [[ "$CONTEXT_RESULT" != "success" || "$required" != "success" || "$selected" != "success" ]]; then
-            echo "::error::DBX deployment did not complete successfully."
-            exit 1
-          fi
-          {
-            echo "deployment_result=success"
-            echo "deployed_sha=$DEPLOYMENT_SHA"
-            echo "deployment_branch=$DEPLOYMENT_BRANCH"
-          } >> "$GITHUB_OUTPUT"
+      close_state: ${{ needs.Execute-DBX-WF-Management-psup.result == 'success' && '3' || '4' }}
+      close_comment: ${{ needs.Execute-DBX-WF-Management-psup.result == 'success' && 'Automation completed successfully.' || 'Automation failed — closing task.' }}
