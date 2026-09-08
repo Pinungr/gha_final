@@ -78,9 +78,10 @@ Application users run only `.github/workflows/code_promotion.yml`. The selected
 the user-created staging branch. The parent workflow calls the existing
 workflow files as local reusable workflows, so every lifecycle job appears
 nested beneath the same Code Promotion run. No continuation is started with
-`gh workflow run`, REST dispatch, or `workflow_run`. The original manually run
-DBX workflow remains independent; Code Promotion uses the separate
-`code_promotion_dbx_management.yml` reusable workflow.
+`gh workflow run`, REST dispatch, or `workflow_run`. In the personal test
+repository, Code Promotion continues to call the safe reusable
+`trigger_DBX_WF_management.yaml` stub. The separate DBX workflow design applies
+only to the organization templates.
 
 The initial promotion PR carries a signed machine-readable promotion marker.
 The parent validates at least one non-author approval, requests normal
@@ -101,8 +102,7 @@ The reusable components are:
 | --- | --- |
 | `promotion_pr_approved.yml` | Polls the signed initial PR, validates the latest non-author approval, requests normal auto-merge, and waits for the actual merge. |
 | `promotion_initial_merged.yml` | Verifies the merged PR identity and exact merge SHA before deployment. |
-| `trigger_DBX_WF_management.yaml` | Independent, manually runnable DBX entry point; the personal-repository version is a safe test stub. |
-| `code_promotion_dbx_management.yml` | Reusable Code Promotion deployment component; the personal-repository version returns safe no-op deployment outputs. |
+| `trigger_DBX_WF_management.yaml` | Personal-repository test stub: supports manual testing and reusable Code Promotion calls without changing external resources. |
 | `promotion_deployment_completed.yml` | Verifies the direct deployment result and exact branch/SHA, then reports whether validation is required. |
 | `promotion_deployment_validation.yml` | Uses the configured GitHub Environment required-reviewer gate for PSUP/PROD. |
 | `promotion_validation_completed.yml` | Creates and waits for the final synchronization PR after validation, or records rejection and prepares a parent-run rollback. |
@@ -156,11 +156,11 @@ concurrency group, operators must not start a manual DBX run for an environment
 while Code Promotion is deploying to that environment.
 
 The enterprise-ready workflow templates are kept in
-`office_workflow_templates/`. They use the same reusable-call graph with
-self-hosted runners and `github.kp.org` token handling. Unlike the active
-personal-repository DBX adapter, the office Code Promotion DBX adapter invokes
-the real shared DevSecOps, ServiceNow, and DBX workflows. The original manual
-DBX workflow is retained separately and is not called by Code Promotion.
+`office_workflow_templates/`. They use self-hosted runners and `github.kp.org`
+token handling. Only these organization templates contain the separate
+`code_promotion_dbx_management.yml` adapter, which invokes the real shared
+DevSecOps, ServiceNow, and DBX workflows. The original organization manual DBX
+workflow is retained separately and is not called by Code Promotion.
 
 The automation never supplies a branch-delete option. Ensure the repository's
 automatic head-branch deletion setting is disabled (or exempts `release/*`), so

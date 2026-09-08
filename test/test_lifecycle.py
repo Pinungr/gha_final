@@ -395,21 +395,21 @@ def test_reusable_workflow_interfaces_and_parent_graph() -> None:
     for child in (
         "promotion_pr_approved.yml",
         "promotion_initial_merged.yml",
-        "code_promotion_dbx_management.yml",
+        "trigger_DBX_WF_management.yaml",
         "promotion_deployment_completed.yml",
         "promotion_deployment_validation.yml",
         "promotion_validation_completed.yml",
     ):
         text = (workflow_dir / child).read_text(encoding="utf-8")
         assert "workflow_call:" in text
-        assert "workflow_dispatch:" not in text
+        if child != "trigger_DBX_WF_management.yaml":
+            assert "workflow_dispatch:" not in text
         assert "workflow_run:" not in text
         assert "pull_request_review:" not in text
         assert "pull_request:" not in text
     assert "uses: ./.github/workflows/promotion_pr_approved.yml" in parent
     assert "uses: ./.github/workflows/promotion_initial_merged.yml" in parent
-    assert "uses: ./.github/workflows/code_promotion_dbx_management.yml" in parent
-    assert "uses: ./.github/workflows/trigger_DBX_WF_management.yaml" not in parent
+    assert "uses: ./.github/workflows/trigger_DBX_WF_management.yaml" in parent
     assert "uses: ./.github/workflows/promotion_deployment_completed.yml" in parent
     assert "uses: ./.github/workflows/promotion_deployment_validation.yml" in parent
     assert "uses: ./.github/workflows/promotion_validation_completed.yml" in parent
@@ -417,7 +417,7 @@ def test_reusable_workflow_interfaces_and_parent_graph() -> None:
     expected_outputs = {
         "promotion_pr_approved.yml": ("merged_sha", "merged_branch", "approval_result"),
         "promotion_initial_merged.yml": ("deployment_sha", "deployment_branch"),
-        "code_promotion_dbx_management.yml": ("deployment_result", "deployed_sha", "deployment_branch"),
+        "trigger_DBX_WF_management.yaml": ("deployment_result", "deployed_sha", "deployment_branch"),
         "promotion_deployment_completed.yml": ("deployment_verified", "requires_validation", "validation_environment"),
         "promotion_deployment_validation.yml": ("validation_result", "validated_sha"),
         "promotion_validation_completed.yml": ("final_pr_number", "final_pr_url", "final_merge_sha", "final_result"),
