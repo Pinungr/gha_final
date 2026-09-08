@@ -132,11 +132,16 @@ GitHub-hosted job limit. On GitHub Enterprise Server or self-hosted runners,
 verify the supported maximum job duration before increasing
 `approval_timeout_hours` or the final-PR polling deadline.
 
-Set repository secret `PROMOTION_LIFECYCLE_HMAC_KEY` to a long random value.
+Set repository secret `PROMOTION_LIFECYCLE_HMAC_KEY` to a random value of at
+least 32 characters.
 The initial workflow signs its metadata with this secret; continuation workflows
-fail closed for unsigned or forged PR markers. `REPO_TOKEN` needs the workflow
-permissions declared in each lifecycle YAML. It is used for protected merges
-and PR comments. If PSUP/PROD branch rules prevent the final
+fail closed for unsigned or forged PR markers. Set repository secret
+`REPO_TOKEN` to a fine-grained token for this repository with Contents,
+Pull requests, Issues, and Workflows set to read and write (Metadata remains
+read-only). A classic token needs `repo` and, when workflow files can be
+promoted, `workflow`. The workflow checks both secrets and token access before
+it can push a promotion branch. The token is used for protected merges and PR
+comments. If PSUP/PROD branch rules prevent the final
 synchronization PR from merging, grant only that automation identity a narrowly
 scoped bypass for PRs carrying the signed final marker; do not grant that bypass
 to the initial promotion PR.

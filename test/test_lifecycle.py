@@ -464,6 +464,8 @@ def test_enterprise_templates_match_reusable_contract() -> None:
         template_dir / "promotion_deployment_validation.yml"
     ).read_text(encoding="utf-8")
     assert parent.count("secrets: inherit") == 7
+    assert "Validate required automation secrets" in parent
+    assert "GH_ENTERPRISE_TOKEN=\"$REPO_TOKEN\" gh api --hostname github.kp.org" in parent
 
 
 def test_deployment_uses_same_environment_concurrency() -> None:
@@ -475,6 +477,18 @@ def test_deployment_uses_same_environment_concurrency() -> None:
     assert "deployment_result=success" in text
     assert "No DBX, ServiceNow, or organization resource was changed." in text
     assert "execute_dbx_wf_management.yml" not in text
+
+
+def test_code_promotion_fails_before_mutation_when_required_secrets_are_missing() -> None:
+    parent = Path(".github/workflows/code_promotion.yml").read_text(encoding="utf-8")
+    preflight = parent.index("- name: Validate required automation secrets")
+    checkout = parent.index("- name: Check out trusted promotion automation")
+    promote = parent.index("name: Prepare promotion and open initial Pull Request")
+    assert preflight < checkout < promote
+    assert "title=Missing REPO_TOKEN" in parent
+    assert "title=Missing PROMOTION_LIFECYCLE_HMAC_KEY" in parent
+    assert "${#PROMOTION_LIFECYCLE_HMAC_KEY} -lt 32" in parent
+    assert "GH_TOKEN=\"$REPO_TOKEN\" gh api \"repos/${GITHUB_REPOSITORY}\"" in parent
 
 
 def test_office_deployment_template_keeps_org_integrations() -> None:
