@@ -480,13 +480,22 @@ def test_deployment_uses_same_environment_concurrency() -> None:
 def test_office_deployment_template_keeps_org_integrations() -> None:
     template = Path("office_workflow_templates/trigger_DBX_WF_management.yaml").read_text(encoding="utf-8")
     parent = Path("office_workflow_templates/code_promotion.yml").read_text(encoding="utf-8")
-    assert "          - master" in template
-    assert "          - uat" not in template
-    assert "repo_ref: ${{ inputs.repo_ref || github.ref }}" in template
+    assert "          - uat" in template
+    assert "          - master" not in template
+    assert "# Existing organization entry point" in template
+    assert "# Automation entry point" in template
+    assert template.count("repo_ref: ${{ inputs.repo_ref || github.ref }}") == 2
     assert "outputs:" not in template
     assert "automation-result:" not in template
     assert "== 'MASTER' && 'master'" in parent
+    assert "== 'PSUP' && 'psup'" in parent
+    assert "format('refs/heads/{0}', needs.process-initial-merge.outputs.deployment_branch)" in parent
     assert "actual_deployment_result: ${{ needs.deploy.result }}" in parent
+    assert "actual_deployed_sha: ${{ needs.process-initial-merge.outputs.deployment_sha }}" in parent
+    assert "run-name: ${{ github.event.pull_request.title }} ${{ inputs.operation }} on ${{ github.ref }}" in template
+    assert "group: ${{ github.workflow }}-${{ github.ref }}" in template
+    assert "needs: [sn-init, Execute-DBX-WF-Management-psup]" in template
+    assert template.count("secrets: inherit") == 6
     assert "execute_dbx_wf_management.yml@master" in template
     assert "service_now_asr_creation_and_validation.yml@master" in template
     assert "service_now_asr_closure.yml@master" in template

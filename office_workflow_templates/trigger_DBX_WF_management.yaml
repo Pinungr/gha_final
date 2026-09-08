@@ -1,6 +1,7 @@
 name: Trigger DBX WF Management
 
 on:
+  # Existing organization entry point. Keep its manual choices unchanged.
   workflow_dispatch:
     inputs:
       environment:
@@ -9,7 +10,7 @@ on:
         type: choice
         options:
           - none
-          - master
+          - uat
           - psup
           - prod
       action:
@@ -23,6 +24,7 @@ on:
           - delete_workflow
           - create/update_and_trigger_workflow
           - trigger_workflow
+  # Automation entry point. The caller supplies the approved deployment ref.
   workflow_call:
     inputs:
       environment:

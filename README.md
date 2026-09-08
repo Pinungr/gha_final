@@ -111,9 +111,11 @@ timestamped release branch, require Environment approval, then create and merge
 the final PR into the protected target branch. Release branches are retained.
 For organization use, copy the corresponding file from
 `office_workflow_templates/`. That version preserves the org DevSecOps,
-ServiceNow, and DBX reusable jobs. Its parent passes `master`, `psup`, or `prod`
-to the DBX workflow and supplies the exact approved deployment branch as
-`repo_ref`.
+ServiceNow, and DBX reusable jobs. When started individually, its existing
+`workflow_dispatch` interface continues to offer `uat`, `psup`, and `prod` and
+uses the selected Git ref. When called by Code Promotion, its separate
+`workflow_call` interface receives `master`, `psup`, or `prod` and the exact
+approved deployment branch as `repo_ref`.
 
 Create the GitHub Environment `ReleaseApproval` and configure its required
 reviewers (up to six users or teams, as needed). It is the shared post-deployment
