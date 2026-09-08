@@ -101,7 +101,7 @@ The reusable components are:
 | --- | --- |
 | `promotion_pr_approved.yml` | Polls the signed initial PR, validates the latest non-author approval, requests normal auto-merge, and waits for the actual merge. |
 | `promotion_initial_merged.yml` | Verifies the merged PR identity and exact merge SHA before deployment. |
-| `trigger_DBX_WF_management.yaml` | Preserves the org DevSecOps, ServiceNow, and DBX reusable jobs, adds exact branch/SHA verification and direct outputs, and remains manually dispatchable. |
+| `trigger_DBX_WF_management.yaml` | Personal-repository test stub: returns successful deployment outputs without changing DBX, ServiceNow, or organization resources. |
 | `promotion_deployment_completed.yml` | Verifies the direct deployment result and exact branch/SHA, then reports whether validation is required. |
 | `promotion_deployment_validation.yml` | Uses the configured GitHub Environment required-reviewer gate for PSUP/PROD. |
 | `promotion_validation_completed.yml` | Creates and waits for the final synchronization PR after validation, or records rejection and prepares a parent-run rollback. |
@@ -109,8 +109,10 @@ The reusable components are:
 MASTER skips validation and final synchronization. PSUP and PROD deploy their
 timestamped release branch, require Environment approval, then create and merge
 the final PR into the protected target branch. Release branches are retained.
-The promotion target `MASTER` is translated to the org DBX environment `uat`;
-PSUP and PROD map to their lower-case DBX environment names.
+For organization use, copy the corresponding file from
+`office_workflow_templates/`. That version preserves the org DevSecOps,
+ServiceNow, and DBX reusable jobs; it translates `MASTER` to `uat`, while PSUP
+and PROD map to their lower-case DBX environment names.
 
 Create the GitHub Environment `ReleaseApproval` and configure its required
 reviewers (up to six users or teams, as needed). It is the shared post-deployment
@@ -140,10 +142,11 @@ Deployment uses environment-based concurrency (`dbx-deployment-${{ inputs.enviro
 so deployments to the same environment are serialized without creating separate
 workflow runs.
 
-The equivalent enterprise-ready workflow templates are kept in
+The enterprise-ready workflow templates are kept in
 `office_workflow_templates/`. They use the same reusable-call graph with
-self-hosted runners and `github.kp.org` token handling, so copying that set into
-`.github/workflows/` preserves the same lifecycle and security checks.
+self-hosted runners and `github.kp.org` token handling. Unlike the active
+personal-repository DBX stub, the office DBX template invokes the real shared
+DevSecOps, ServiceNow, and DBX workflows.
 
 The automation never supplies a branch-delete option. Ensure the repository's
 automatic head-branch deletion setting is disabled (or exempts `release/*`), so

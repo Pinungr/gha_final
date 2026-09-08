@@ -471,7 +471,17 @@ def test_deployment_uses_same_environment_concurrency() -> None:
     assert "workflow_dispatch:" in text
     assert "workflow_call:" in text
     assert "      action:" in text
+    assert "deployment_result=success" in text
+    assert "No DBX, ServiceNow, or organization resource was changed." in text
+    assert "execute_dbx_wf_management.yml" not in text
+
+
+def test_office_deployment_template_keeps_org_integrations() -> None:
+    text = Path("office_workflow_templates/trigger_DBX_WF_management.yaml").read_text(encoding="utf-8")
     assert "inputs.environment == 'MASTER' && 'uat'" in text
+    assert "execute_dbx_wf_management.yml@master" in text
+    assert "service_now_asr_creation_and_validation.yml@master" in text
+    assert "service_now_asr_closure.yml@master" in text
 
 
 def test_obsolete_timeout_workflow_is_removed() -> None:
