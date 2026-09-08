@@ -1,14 +1,7 @@
-name: code_promotion
+name: Code Promotion
 
-# Controlled promotion between environments. QA -> PSUP -> PROD. Operators
-# create a temporary branch and commit its root promotion.txt inventory before
-# dispatching this workflow. The automation updates that branch, creates a
-# generated release/* branch from the target, and opens a Pull Request.
-#
-# Only users with write access to the repository can dispatch a workflow, which
-# is the authorization gate for this pipeline. See docs/INSTALL.md for an
-# optional environment-based approval gate on top of that.
-
+# The only application-facing entry point. The selected "Use workflow from"
+# ref remains the staging branch; automation code is checked out from master.
 on:
   workflow_dispatch:
     inputs:
@@ -16,10 +9,7 @@ on:
         description: "Promotion target"
         required: true
         type: choice
-        options:
-          - MASTER
-          - PSUP
-          - PROD
+        options: [MASTER, PSUP, PROD]
       release_description:
         description: "Optional description for the Pull Request"
         required: false
@@ -28,48 +18,47 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: write
 
-# Promotion preparation is serialized per target. Deployment remains owned by
-# the separate dummy DBX workflow and is intentionally not changed here.
 concurrency:
   group: code-promotion-${{ inputs.deployment_target }}
   cancel-in-progress: false
 
 jobs:
-  promote:
-    name: Promote to ${{ inputs.deployment_target }}
+  prepare-promotion:
+    name: Prepare ${{ inputs.deployment_target }} promotion
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
       promotion_id: ${{ steps.promote.outputs.promotion_id }}
-      has_workflow_changes: ${{ steps.promote.outputs.has_workflow_changes }}
+      deployment_target: ${{ steps.promote.outputs.deployment_target }}
+      source_branch: ${{ steps.promote.outputs.source_branch }}
+      target_branch: ${{ steps.promote.outputs.target_branch }}
+      staging_branch: ${{ steps.promote.outputs.staging_branch }}
+      release_branch: ${{ steps.promote.outputs.release_branch }}
+      deployment_branch: ${{ steps.promote.outputs.deployment_branch }}
       deployment_action: ${{ steps.promote.outputs.deployment_action }}
-
+      has_workflow_changes: ${{ steps.promote.outputs.has_workflow_changes }}
+      initial_pr_number: ${{ steps.promote.outputs.initial_pr_number }}
+      initial_pr_url: ${{ steps.promote.outputs.initial_pr_url }}
+      initial_pr_head_sha: ${{ steps.promote.outputs.initial_pr_head_sha }}
+      initial_pr_base: ${{ steps.promote.outputs.initial_pr_base }}
     steps:
-      - name: Check out repository
-        # Pinned to a full-length commit SHA: this repository requires it.
-        # actions/checkout v4.4.0
+      - name: Check out trusted promotion automation
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          # Run the current promotion engine from master. It fetches and checks
-          # out the user-selected temporary branch only after all preflight
-          # validation has passed.
           ref: master
           fetch-depth: 0
-
       - name: Set up Python
-        # actions/setup-python v5.6.0
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.12"
-
       - name: Configure git identity
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Prepare promotion and open Pull Request
-        id: promote
+      - id: promote
+        name: Prepare promotion and open initial Pull Request
         env:
           INPUT_DEPLOYMENT_TARGET: ${{ inputs.deployment_target }}
           INPUT_STAGING_BRANCH: ${{ github.ref_name }}
@@ -78,12 +67,136 @@ jobs:
           PROMOTION_LIFECYCLE_HMAC_KEY: ${{ secrets.PROMOTION_LIFECYCLE_HMAC_KEY }}
         run: python -m promotion
 
-      - name: Report result
-        if: success()
+  wait-for-initial-pr:
+    needs: prepare-promotion
+    uses: ./.github/workflows/promotion_pr_approved.yml
+    with:
+      promotion_id: ${{ needs.prepare-promotion.outputs.promotion_id }}
+      initial_pr_number: ${{ needs.prepare-promotion.outputs.initial_pr_number }}
+      initial_pr_head_sha: ${{ needs.prepare-promotion.outputs.initial_pr_head_sha }}
+      staging_branch: ${{ needs.prepare-promotion.outputs.staging_branch }}
+      initial_pr_base: ${{ needs.prepare-promotion.outputs.initial_pr_base }}
+      approval_timeout_hours: 5
+    secrets: inherit
+
+  process-initial-merge:
+    needs: [prepare-promotion, wait-for-initial-pr]
+    uses: ./.github/workflows/promotion_initial_merged.yml
+    with:
+      promotion_id: ${{ needs.prepare-promotion.outputs.promotion_id }}
+      initial_pr_number: ${{ needs.prepare-promotion.outputs.initial_pr_number }}
+      merged_sha: ${{ needs.wait-for-initial-pr.outputs.merged_sha }}
+      deployment_branch: ${{ needs.prepare-promotion.outputs.deployment_branch }}
+      deployment_target: ${{ needs.prepare-promotion.outputs.deployment_target }}
+      deployment_action: ${{ needs.prepare-promotion.outputs.deployment_action }}
+    secrets: inherit
+
+  deploy:
+    needs: [prepare-promotion, process-initial-merge]
+    uses: ./.github/workflows/trigger_DBX_WF_management.yaml
+    with:
+      environment: ${{ needs.process-initial-merge.outputs.deployment_target }}
+      deployment_action: ${{ needs.process-initial-merge.outputs.deployment_action }}
+      promotion_id: ${{ needs.prepare-promotion.outputs.promotion_id }}
+      initial_pr_number: ${{ needs.prepare-promotion.outputs.initial_pr_number }}
+      deployment_branch: ${{ needs.process-initial-merge.outputs.deployment_branch }}
+      deployment_sha: ${{ needs.process-initial-merge.outputs.deployment_sha }}
+    secrets: inherit
+
+  verify-deployment:
+    needs: [prepare-promotion, process-initial-merge, deploy]
+    uses: ./.github/workflows/promotion_deployment_completed.yml
+    with:
+      promotion_id: ${{ needs.prepare-promotion.outputs.promotion_id }}
+      initial_pr_number: ${{ needs.prepare-promotion.outputs.initial_pr_number }}
+      deployment_target: ${{ needs.process-initial-merge.outputs.deployment_target }}
+      deployment_branch: ${{ needs.process-initial-merge.outputs.deployment_branch }}
+      expected_deployment_sha: ${{ needs.process-initial-merge.outputs.deployment_sha }}
+      actual_deployment_result: ${{ needs.deploy.outputs.deployment_result }}
+      actual_deployed_sha: ${{ needs.deploy.outputs.deployed_sha }}
+    secrets: inherit
+
+  validate-deployment:
+    if: needs.verify-deployment.outputs.requires_validation == 'true'
+    needs: [prepare-promotion, process-initial-merge, verify-deployment]
+    uses: ./.github/workflows/promotion_deployment_validation.yml
+    with:
+      promotion_id: ${{ needs.prepare-promotion.outputs.promotion_id }}
+      initial_pr_number: ${{ needs.prepare-promotion.outputs.initial_pr_number }}
+      deployment_target: ${{ needs.process-initial-merge.outputs.deployment_target }}
+      deployment_branch: ${{ needs.process-initial-merge.outputs.deployment_branch }}
+      deployed_sha: ${{ needs.process-initial-merge.outputs.deployment_sha }}
+      validation_environment: ${{ needs.verify-deployment.outputs.validation_environment }}
+    secrets: inherit
+
+  process-validation-result:
+    if: >-
+      ${{ always() && needs.verify-deployment.outputs.requires_validation == 'true' }}
+    needs: [prepare-promotion, process-initial-merge, verify-deployment, validate-deployment]
+    uses: ./.github/workflows/promotion_validation_completed.yml
+    with:
+      promotion_id: ${{ needs.prepare-promotion.outputs.promotion_id }}
+      initial_pr_number: ${{ needs.prepare-promotion.outputs.initial_pr_number }}
+      deployment_target: ${{ needs.process-initial-merge.outputs.deployment_target }}
+      release_branch: ${{ needs.process-initial-merge.outputs.deployment_branch }}
+      deployed_sha: ${{ needs.process-initial-merge.outputs.deployment_sha }}
+      validation_result: ${{ needs.validate-deployment.result }}
+    secrets: inherit
+
+  rollback-deployment:
+    if: >-
+      ${{ always() && needs.process-validation-result.outputs.rollback_required == 'true' }}
+    needs: [prepare-promotion, process-validation-result]
+    uses: ./.github/workflows/trigger_DBX_WF_management.yaml
+    with:
+      environment: ${{ needs.process-validation-result.outputs.rollback_target }}
+      deployment_action: create/update_repo
+      promotion_id: ${{ needs.prepare-promotion.outputs.promotion_id }}
+      initial_pr_number: ${{ needs.prepare-promotion.outputs.initial_pr_number }}
+      deployment_branch: ${{ needs.process-validation-result.outputs.rollback_branch }}
+      deployment_sha: ${{ needs.process-validation-result.outputs.rollback_sha }}
+    secrets: inherit
+
+  promotion-summary:
+    if: always()
+    needs:
+      - prepare-promotion
+      - wait-for-initial-pr
+      - process-initial-merge
+      - deploy
+      - verify-deployment
+      - validate-deployment
+      - process-validation-result
+      - rollback-deployment
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write final promotion summary
+        env:
+          TARGET: ${{ needs.prepare-promotion.outputs.deployment_target }}
+          INITIAL_PR: ${{ needs.prepare-promotion.outputs.initial_pr_url }}
+          VERIFY_RESULT: ${{ needs.verify-deployment.result }}
+          VALIDATION_RESULT: ${{ needs.validate-deployment.result }}
+          FINAL_RESULT: ${{ needs.process-validation-result.outputs.final_result }}
+          FINAL_PR: ${{ needs.process-validation-result.outputs.final_pr_url }}
+          ROLLBACK_RESULT: ${{ needs.rollback-deployment.result }}
         run: |
-          echo "Temporary branch : ${{ steps.promote.outputs.temporary_branch }}"
-          echo "Release branch   : ${{ steps.promote.outputs.release_branch }}"
-          echo "Pull Request     : ${{ steps.promote.outputs.pr_url }}"
-          echo "Promotion ID     : ${{ steps.promote.outputs.promotion_id }}"
-          echo "Workflow changes : ${{ steps.promote.outputs.has_workflow_changes }}"
-          echo "Deployment action: ${{ steps.promote.outputs.deployment_action }}"
+          {
+            echo "## Code Promotion summary"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Target | \`${TARGET:-not started}\` |"
+            echo "| Initial PR | ${INITIAL_PR:-not created} |"
+            echo "| Deployment verification | \`${VERIFY_RESULT}\` |"
+            echo "| Validation | \`${VALIDATION_RESULT}\` |"
+            echo "| Final synchronization | \`${FINAL_RESULT}\` |"
+            echo "| Final PR | ${FINAL_PR:-not applicable} |"
+            echo "| Rollback | \`${ROLLBACK_RESULT}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$TARGET" == "MASTER" && "$VERIFY_RESULT" == "success" ]]; then
+            exit 0
+          fi
+          if [[ "$TARGET" != "MASTER" && "$VALIDATION_RESULT" == "success" && "$FINAL_RESULT" == "merged" ]]; then
+            exit 0
+          fi
+          exit 1

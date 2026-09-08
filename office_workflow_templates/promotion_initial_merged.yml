@@ -1,23 +1,49 @@
-name: Promotion initial merge continuation
+name: Promotion initial merge verification
 
 on:
-  pull_request:
-    types: [closed]
+  workflow_call:
+    inputs:
+      promotion_id:
+        required: true
+        type: string
+      initial_pr_number:
+        required: true
+        type: string
+      merged_sha:
+        required: true
+        type: string
+      deployment_branch:
+        required: true
+        type: string
+      deployment_target:
+        required: true
+        type: string
+      deployment_action:
+        required: true
+        type: string
+    outputs:
+      deployment_branch:
+        value: ${{ jobs.verify-merge.outputs.deployment_branch }}
+      deployment_sha:
+        value: ${{ jobs.verify-merge.outputs.deployment_sha }}
+      deployment_target:
+        value: ${{ jobs.verify-merge.outputs.deployment_target }}
+      deployment_action:
+        value: ${{ jobs.verify-merge.outputs.deployment_action }}
 
 permissions:
   contents: read
   pull-requests: write
   issues: write
-  actions: write
-
-concurrency:
-  group: promotion-initial-merged-${{ github.event.pull_request.number }}
-  cancel-in-progress: false
 
 jobs:
-  dispatch-deployment:
-    if: github.event.pull_request.merged == true
+  verify-merge:
     runs-on: self-hosted
+    outputs:
+      deployment_branch: ${{ steps.verify.outputs.deployment_branch }}
+      deployment_sha: ${{ steps.verify.outputs.deployment_sha }}
+      deployment_target: ${{ steps.verify.outputs.deployment_target }}
+      deployment_action: ${{ steps.verify.outputs.deployment_action }}
     steps:
       - name: Check out trusted master from internal GitHub
         working-directory: ${{ github.workspace }}
@@ -30,14 +56,22 @@ jobs:
           git checkout --force -B master FETCH_HEAD
       - name: Verify Org Python
         run: python --version
-      - name: Continue managed promotion after merge
+      - id: verify
+        name: Verify the authenticated initial merge
         env:
           GH_HOST: github.kp.org
           GH_TOKEN: ${{ secrets.REPO_TOKEN }}
           GH_ENTERPRISE_TOKEN: ${{ secrets.REPO_TOKEN }}
           PROMOTION_LIFECYCLE_HMAC_KEY: ${{ secrets.PROMOTION_LIFECYCLE_HMAC_KEY }}
           PYTHONPATH: ${{ github.workspace }}
-        run: python -m promotion.lifecycle pr-closed
+        run: |
+          python -m promotion.lifecycle verify-initial-merge \
+            --promotion-id "${{ inputs.promotion_id }}" \
+            --initial-pr-number "${{ inputs.initial_pr_number }}" \
+            --merged-sha "${{ inputs.merged_sha }}" \
+            --deployment-branch "${{ inputs.deployment_branch }}" \
+            --deployment-target "${{ inputs.deployment_target }}" \
+            --deployment-action "${{ inputs.deployment_action }}"
       - name: Remove Git credential
         if: always()
         run: git remote set-url origin "https://github.kp.org/${GITHUB_REPOSITORY}.git" || true

@@ -1,8 +1,33 @@
-name: Promotion PR approval continuation
+name: Promotion initial Pull Request approval
 
 on:
-  pull_request_review:
-    types: [submitted]
+  workflow_call:
+    inputs:
+      promotion_id:
+        required: true
+        type: string
+      initial_pr_number:
+        required: true
+        type: string
+      initial_pr_head_sha:
+        required: true
+        type: string
+      staging_branch:
+        required: true
+        type: string
+      initial_pr_base:
+        required: true
+        type: string
+      approval_timeout_hours:
+        required: true
+        type: number
+    outputs:
+      merged_sha:
+        value: ${{ jobs.wait-for-merge.outputs.merged_sha }}
+      merged_branch:
+        value: ${{ jobs.wait-for-merge.outputs.merged_branch }}
+      approval_result:
+        value: ${{ jobs.wait-for-merge.outputs.approval_result }}
 
 permissions:
   contents: read
@@ -10,15 +35,19 @@ permissions:
   issues: write
 
 concurrency:
-  group: promotion-initial-${{ github.event.pull_request.number }}
+  group: promotion-initial-${{ inputs.initial_pr_number }}
   cancel-in-progress: false
 
 jobs:
-  approve-and-merge:
-    # The Python handler additionally verifies the signed managed marker,
-    # reviewer state, expected branches, and GitHub's merge eligibility.
-    if: github.event.review.state == 'approved'
+  wait-for-merge:
     runs-on: ubuntu-latest
+    # GitHub-hosted jobs are limited to six hours. Five hours leaves room for
+    # setup and final reporting, and is enforced below for this reusable job.
+    timeout-minutes: 360
+    outputs:
+      merged_sha: ${{ steps.poll.outputs.merged_sha }}
+      merged_branch: ${{ steps.poll.outputs.merged_branch }}
+      approval_result: ${{ steps.poll.outputs.approval_result }}
     steps:
       - name: Check out trusted promotion automation
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -29,8 +58,41 @@ jobs:
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.12"
-      - name: Verify approval and request protected merge
+      - name: Explain approval wait
+        run: |
+          echo "## Waiting for initial Pull Request" >> "$GITHUB_STEP_SUMMARY"
+          echo "Waiting for [PR #${{ inputs.initial_pr_number }}](${{ github.server_url }}/${{ github.repository }}/pull/${{ inputs.initial_pr_number }}) to receive a non-author approval and merge." >> "$GITHUB_STEP_SUMMARY"
+      - id: poll
+        name: Validate approval and wait for actual merge
         env:
           GH_TOKEN: ${{ secrets.REPO_TOKEN }}
           PROMOTION_LIFECYCLE_HMAC_KEY: ${{ secrets.PROMOTION_LIFECYCLE_HMAC_KEY }}
-        run: python -m promotion.lifecycle initial-approval
+          APPROVAL_TIMEOUT_HOURS: ${{ inputs.approval_timeout_hours }}
+        run: |
+          if ! [[ "$APPROVAL_TIMEOUT_HOURS" =~ ^[1-5]$ ]]; then
+            echo "::error::approval_timeout_hours must be between 1 and 5 on the current GitHub-hosted runner."
+            exit 1
+          fi
+          deadline=$(( $(date +%s) + APPROVAL_TIMEOUT_HOURS * 3600 ))
+          while true; do
+            set +e
+            python -m promotion.lifecycle initial-pr-progress \
+              --promotion-id "${{ inputs.promotion_id }}" \
+              --initial-pr-number "${{ inputs.initial_pr_number }}" \
+              --initial-pr-head-sha "${{ inputs.initial_pr_head_sha }}" \
+              --staging-branch "${{ inputs.staging_branch }}" \
+              --initial-pr-base "${{ inputs.initial_pr_base }}"
+            status=$?
+            set -e
+            if [[ "$status" -eq 0 ]]; then
+              exit 0
+            fi
+            if [[ "$status" -ne 3 ]]; then
+              exit "$status"
+            fi
+            if (( $(date +%s) >= deadline )); then
+              echo "::error::Initial Pull Request was not merged within ${APPROVAL_TIMEOUT_HOURS} hour(s)."
+              exit 1
+            fi
+            sleep 60
+          done

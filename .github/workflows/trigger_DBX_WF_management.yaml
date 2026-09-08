@@ -1,56 +1,78 @@
 name: Trigger DBX WF Management
 
-run-name: "DBX deployment: ${{ inputs.promotion_id || format('manual-{0}', github.run_id) }}"
-
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       environment:
-        description: Environment
         required: true
-        type: choice
-        options: [MASTER, PSUP, PROD]
+        type: string
       deployment_action:
-        description: Deployment Action
         required: true
-        type: choice
-        options: [create/update_repo, none, create/update_workflow, delete_workflow, create/update_and_trigger_workflow, trigger_workflow]
+        type: string
       promotion_id:
-        description: Promotion ID (set automatically; leave blank for a manual run)
-        required: false
+        required: true
         type: string
       initial_pr_number:
-        description: Initial promotion PR number (set automatically)
-        required: false
+        required: true
         type: string
+      deployment_branch:
+        required: true
+        type: string
+      deployment_sha:
+        required: true
+        type: string
+    outputs:
+      deployment_result:
+        value: ${{ jobs.report.outputs.deployment_result }}
+      deployed_sha:
+        value: ${{ jobs.report.outputs.deployed_sha }}
+      deployment_branch:
+        value: ${{ jobs.report.outputs.deployment_branch }}
 
 permissions:
   contents: read
 
 concurrency:
-  group: dbx-deployment-${{ inputs.promotion_id || github.run_id }}
+  group: dbx-deployment-${{ inputs.environment }}
   cancel-in-progress: false
 
 jobs:
   context:
-    name: Deployment context
+    name: Verify deployment context
     runs-on: ubuntu-latest
     outputs:
-      branch: ${{ steps.context.outputs.branch }}
+      deployment_branch: ${{ steps.verify.outputs.deployment_branch }}
+      deployment_sha: ${{ steps.verify.outputs.deployed_sha }}
     steps:
-      - id: context
+      - name: Check out trusted promotion automation
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: master
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+      - id: verify
+        name: Verify exact deployment branch and SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "branch=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          python -m promotion.lifecycle verify-deployment-branch \
+            --deployment-branch "${{ inputs.deployment_branch }}" \
+            --deployment-sha "${{ inputs.deployment_sha }}"
+      - name: Write deployment summary
+        run: |
           {
             echo "## DBX deployment requested"
             echo ""
             echo "| Field | Value |"
             echo "| --- | --- |"
-            echo "| Promotion ID | \`${{ inputs.promotion_id || format('manual-{0}', github.run_id) }}\` |"
+            echo "| Promotion ID | \`${{ inputs.promotion_id }}\` |"
             echo "| Environment | \`${{ inputs.environment }}\` |"
-            echo "| Branch | \`${{ github.ref_name }}\` |"
+            echo "| Branch | \`${{ inputs.deployment_branch }}\` |"
+            echo "| SHA | \`${{ inputs.deployment_sha }}\` |"
             echo "| Deployment action | \`${{ inputs.deployment_action }}\` |"
-            echo "| Status | Handler configuration required |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   create_or_update_repo:
@@ -110,3 +132,50 @@ jobs:
     steps:
       - name: Record no-op deployment
         run: echo "No deployment action was requested." >> "$GITHUB_STEP_SUMMARY"
+
+  report:
+    if: always()
+    needs:
+      - context
+      - create_or_update_repo
+      - create_or_update_workflow
+      - delete_workflow
+      - create_update_and_trigger_workflow
+      - trigger_workflow
+      - no_operation
+    runs-on: ubuntu-latest
+    outputs:
+      deployment_result: ${{ steps.result.outputs.deployment_result }}
+      deployed_sha: ${{ steps.result.outputs.deployed_sha }}
+      deployment_branch: ${{ steps.result.outputs.deployment_branch }}
+    steps:
+      - id: result
+        name: Return direct deployment result
+        env:
+          ACTION: ${{ inputs.deployment_action }}
+          CONTEXT_RESULT: ${{ needs.context.result }}
+          REPO_RESULT: ${{ needs.create_or_update_repo.result }}
+          WORKFLOW_RESULT: ${{ needs.create_or_update_workflow.result }}
+          DELETE_RESULT: ${{ needs.delete_workflow.result }}
+          UPDATE_TRIGGER_RESULT: ${{ needs.create_update_and_trigger_workflow.result }}
+          TRIGGER_RESULT: ${{ needs.trigger_workflow.result }}
+          NONE_RESULT: ${{ needs.no_operation.result }}
+        run: |
+          case "$ACTION" in
+            create/update_repo) selected="$REPO_RESULT" ;;
+            create/update_workflow) selected="$WORKFLOW_RESULT" ;;
+            delete_workflow) selected="$DELETE_RESULT" ;;
+            create/update_and_trigger_workflow) selected="$UPDATE_TRIGGER_RESULT" ;;
+            trigger_workflow) selected="$TRIGGER_RESULT" ;;
+            none) selected="$NONE_RESULT" ;;
+            *) echo "::error::Unsupported deployment action: $ACTION"; exit 1 ;;
+          esac
+          if [[ "$CONTEXT_RESULT" != "success" || "$selected" != "success" ]]; then
+            echo "::error::Deployment did not complete successfully."
+            exit 1
+          fi
+          {
+            echo "deployment_result=success"
+            echo "deployed_sha=${{ inputs.deployment_sha }}"
+            echo "deployment_branch=${{ inputs.deployment_branch }}"
+          } >> "$GITHUB_OUTPUT"
