@@ -1,1 +1,1 @@
-workflows/testing.json
+testing.json
