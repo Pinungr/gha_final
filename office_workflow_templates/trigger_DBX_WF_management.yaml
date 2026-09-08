@@ -1,7 +1,6 @@
 name: Trigger DBX WF Management
 
 on:
-  # Existing organization entry point. Keep its manual choices unchanged.
   workflow_dispatch:
     inputs:
       environment:
@@ -24,18 +23,6 @@ on:
           - delete_workflow
           - create/update_and_trigger_workflow
           - trigger_workflow
-  # Automation entry point. The caller supplies the approved deployment ref.
-  workflow_call:
-    inputs:
-      environment:
-        required: true
-        type: string
-      action:
-        required: true
-        type: string
-      repo_ref:
-        required: true
-        type: string
 
 # Customize the name of the workflow run
 run-name: ${{ github.event.pull_request.title }} ${{ inputs.operation }} on ${{ github.ref }}
@@ -81,7 +68,7 @@ jobs:
       environment: ${{ inputs.environment }}
       action: ${{ inputs.action }}
       repo_url: ${{ github.server_url }}/${{ github.repository }}.git
-      repo_ref: ${{ inputs.repo_ref || github.ref }}
+      repo_ref: ${{ github.ref }}
       triggered_by: ${{ github.actor }}
     secrets: inherit
 
@@ -94,7 +81,7 @@ jobs:
       environment: ${{ inputs.environment }}
       action: ${{ inputs.action }}
       repo_url: ${{ github.server_url }}/${{ github.repository }}.git
-      repo_ref: ${{ inputs.repo_ref || github.ref }}
+      repo_ref: ${{ github.ref }}
       triggered_by: ${{ github.actor }}
     secrets: inherit
 

@@ -395,21 +395,21 @@ def test_reusable_workflow_interfaces_and_parent_graph() -> None:
     for child in (
         "promotion_pr_approved.yml",
         "promotion_initial_merged.yml",
-        "trigger_DBX_WF_management.yaml",
+        "code_promotion_dbx_management.yml",
         "promotion_deployment_completed.yml",
         "promotion_deployment_validation.yml",
         "promotion_validation_completed.yml",
     ):
         text = (workflow_dir / child).read_text(encoding="utf-8")
         assert "workflow_call:" in text
-        if child != "trigger_DBX_WF_management.yaml":
-            assert "workflow_dispatch:" not in text
+        assert "workflow_dispatch:" not in text
         assert "workflow_run:" not in text
         assert "pull_request_review:" not in text
         assert "pull_request:" not in text
     assert "uses: ./.github/workflows/promotion_pr_approved.yml" in parent
     assert "uses: ./.github/workflows/promotion_initial_merged.yml" in parent
-    assert "uses: ./.github/workflows/trigger_DBX_WF_management.yaml" in parent
+    assert "uses: ./.github/workflows/code_promotion_dbx_management.yml" in parent
+    assert "uses: ./.github/workflows/trigger_DBX_WF_management.yaml" not in parent
     assert "uses: ./.github/workflows/promotion_deployment_completed.yml" in parent
     assert "uses: ./.github/workflows/promotion_deployment_validation.yml" in parent
     assert "uses: ./.github/workflows/promotion_validation_completed.yml" in parent
@@ -417,7 +417,7 @@ def test_reusable_workflow_interfaces_and_parent_graph() -> None:
     expected_outputs = {
         "promotion_pr_approved.yml": ("merged_sha", "merged_branch", "approval_result"),
         "promotion_initial_merged.yml": ("deployment_sha", "deployment_branch"),
-        "trigger_DBX_WF_management.yaml": ("deployment_result", "deployed_sha", "deployment_branch"),
+        "code_promotion_dbx_management.yml": ("deployment_result", "deployed_sha", "deployment_branch"),
         "promotion_deployment_completed.yml": ("deployment_verified", "requires_validation", "validation_environment"),
         "promotion_deployment_validation.yml": ("validation_result", "validated_sha"),
         "promotion_validation_completed.yml": ("final_pr_number", "final_pr_url", "final_merge_sha", "final_result"),
@@ -449,17 +449,15 @@ def test_enterprise_templates_match_reusable_contract() -> None:
     for child in (
         "promotion_pr_approved.yml",
         "promotion_initial_merged.yml",
-        "trigger_DBX_WF_management.yaml",
+        "code_promotion_dbx_management.yml",
         "promotion_deployment_completed.yml",
         "promotion_deployment_validation.yml",
         "promotion_validation_completed.yml",
     ):
         child_text = (template_dir / child).read_text(encoding="utf-8")
         assert "workflow_call:" in child_text
-        if child != "trigger_DBX_WF_management.yaml":
-            assert "runs-on: self-hosted" in child_text
-        if child != "trigger_DBX_WF_management.yaml":
-            assert "workflow_dispatch:" not in child_text
+        assert "runs-on: self-hosted" in child_text
+        assert "workflow_dispatch:" not in child_text
     assert "environment:\n      name: ${{ inputs.validation_environment }}" in (
         template_dir / "promotion_deployment_validation.yml"
     ).read_text(encoding="utf-8")
@@ -493,26 +491,29 @@ def test_code_promotion_fails_before_mutation_when_required_secrets_are_missing(
 
 def test_office_deployment_template_keeps_org_integrations() -> None:
     template = Path("office_workflow_templates/trigger_DBX_WF_management.yaml").read_text(encoding="utf-8")
+    adapter = Path("office_workflow_templates/code_promotion_dbx_management.yml").read_text(encoding="utf-8")
     parent = Path("office_workflow_templates/code_promotion.yml").read_text(encoding="utf-8")
     assert "          - uat" in template
     assert "          - master" not in template
-    assert "# Existing organization entry point" in template
-    assert "# Automation entry point" in template
-    assert template.count("repo_ref: ${{ inputs.repo_ref || github.ref }}") == 2
+    assert "workflow_call:" not in template
+    assert template.count("repo_ref: ${{ github.ref }}") == 2
     assert "outputs:" not in template
     assert "automation-result:" not in template
-    assert "== 'MASTER' && 'master'" in parent
+    assert "uses: ./.github/workflows/code_promotion_dbx_management.yml" in parent
+    assert "uses: ./.github/workflows/trigger_DBX_WF_management.yaml" not in parent
+    assert "== 'MASTER' && 'uat'" in parent
     assert "== 'PSUP' && 'psup'" in parent
-    assert "format('refs/heads/{0}', needs.process-initial-merge.outputs.deployment_branch)" in parent
-    assert "actual_deployment_result: ${{ needs.deploy.result }}" in parent
-    assert "actual_deployed_sha: ${{ needs.process-initial-merge.outputs.deployment_sha }}" in parent
+    assert "actual_deployment_result: ${{ needs.deploy.outputs.deployment_result }}" in parent
+    assert "actual_deployed_sha: ${{ needs.deploy.outputs.deployed_sha }}" in parent
     assert "run-name: ${{ github.event.pull_request.title }} ${{ inputs.operation }} on ${{ github.ref }}" in template
     assert "group: ${{ github.workflow }}-${{ github.ref }}" in template
     assert "needs: [sn-init, Execute-DBX-WF-Management-psup]" in template
     assert template.count("secrets: inherit") == 6
-    assert "execute_dbx_wf_management.yml@master" in template
-    assert "service_now_asr_creation_and_validation.yml@master" in template
-    assert "service_now_asr_closure.yml@master" in template
+    assert "verify-deployment-branch" in adapter
+    assert adapter.count("repo_ref: ${{ format('refs/heads/{0}', inputs.deployment_branch) }}") == 2
+    assert "execute_dbx_wf_management.yml@master" in adapter
+    assert "service_now_asr_creation_and_validation.yml@master" in adapter
+    assert "service_now_asr_closure.yml@master" in adapter
 
 
 def test_obsolete_timeout_workflow_is_removed() -> None:

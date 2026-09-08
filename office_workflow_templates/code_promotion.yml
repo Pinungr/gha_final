@@ -140,11 +140,14 @@ jobs:
 
   deploy:
     needs: [prepare-promotion, process-initial-merge]
-    uses: ./.github/workflows/trigger_DBX_WF_management.yaml
+    uses: ./.github/workflows/code_promotion_dbx_management.yml
     with:
-      environment: ${{ needs.process-initial-merge.outputs.deployment_target == 'MASTER' && 'master' || needs.process-initial-merge.outputs.deployment_target == 'PSUP' && 'psup' || 'prod' }}
+      environment: ${{ needs.process-initial-merge.outputs.deployment_target == 'MASTER' && 'uat' || needs.process-initial-merge.outputs.deployment_target == 'PSUP' && 'psup' || 'prod' }}
       action: ${{ needs.process-initial-merge.outputs.deployment_action }}
-      repo_ref: ${{ format('refs/heads/{0}', needs.process-initial-merge.outputs.deployment_branch) }}
+      promotion_id: ${{ needs.prepare-promotion.outputs.promotion_id }}
+      initial_pr_number: ${{ needs.prepare-promotion.outputs.initial_pr_number }}
+      deployment_branch: ${{ needs.process-initial-merge.outputs.deployment_branch }}
+      deployment_sha: ${{ needs.process-initial-merge.outputs.deployment_sha }}
     secrets: inherit
 
   verify-deployment:
@@ -156,8 +159,8 @@ jobs:
       deployment_target: ${{ needs.process-initial-merge.outputs.deployment_target }}
       deployment_branch: ${{ needs.process-initial-merge.outputs.deployment_branch }}
       expected_deployment_sha: ${{ needs.process-initial-merge.outputs.deployment_sha }}
-      actual_deployment_result: ${{ needs.deploy.result }}
-      actual_deployed_sha: ${{ needs.process-initial-merge.outputs.deployment_sha }}
+      actual_deployment_result: ${{ needs.deploy.outputs.deployment_result }}
+      actual_deployed_sha: ${{ needs.deploy.outputs.deployed_sha }}
     secrets: inherit
 
   validate-deployment:
@@ -189,11 +192,14 @@ jobs:
   rollback-deployment:
     if: ${{ always() && needs.process-validation-result.outputs.rollback_required == 'true' }}
     needs: [prepare-promotion, process-validation-result]
-    uses: ./.github/workflows/trigger_DBX_WF_management.yaml
+    uses: ./.github/workflows/code_promotion_dbx_management.yml
     with:
-      environment: ${{ needs.process-validation-result.outputs.rollback_target == 'MASTER' && 'master' || needs.process-validation-result.outputs.rollback_target == 'PSUP' && 'psup' || 'prod' }}
+      environment: ${{ needs.process-validation-result.outputs.rollback_target == 'MASTER' && 'uat' || needs.process-validation-result.outputs.rollback_target == 'PSUP' && 'psup' || 'prod' }}
       action: create/update_repo
-      repo_ref: ${{ format('refs/heads/{0}', needs.process-validation-result.outputs.rollback_branch) }}
+      promotion_id: ${{ needs.prepare-promotion.outputs.promotion_id }}
+      initial_pr_number: ${{ needs.prepare-promotion.outputs.initial_pr_number }}
+      deployment_branch: ${{ needs.process-validation-result.outputs.rollback_branch }}
+      deployment_sha: ${{ needs.process-validation-result.outputs.rollback_sha }}
     secrets: inherit
 
   promotion-summary:
