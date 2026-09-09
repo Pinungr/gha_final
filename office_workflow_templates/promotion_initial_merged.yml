@@ -18,9 +18,6 @@ on:
       deployment_target:
         required: true
         type: string
-      deployment_action:
-        required: true
-        type: string
     outputs:
       deployment_branch:
         value: ${{ jobs.verify-merge.outputs.deployment_branch }}
@@ -57,12 +54,11 @@ jobs:
       - name: Verify Org Python
         run: python --version
       - id: verify
-        name: Verify the authenticated initial merge
+        name: Verify the final merged Pull Request
         env:
           GH_HOST: github.kp.org
           GH_TOKEN: ${{ secrets.REPO_TOKEN }}
           GH_ENTERPRISE_TOKEN: ${{ secrets.REPO_TOKEN }}
-          PROMOTION_LIFECYCLE_HMAC_KEY: ${{ secrets.PROMOTION_LIFECYCLE_HMAC_KEY }}
           PYTHONPATH: ${{ github.workspace }}
         run: |
           python -m promotion.lifecycle verify-initial-merge \
@@ -71,7 +67,7 @@ jobs:
             --merged-sha "${{ inputs.merged_sha }}" \
             --deployment-branch "${{ inputs.deployment_branch }}" \
             --deployment-target "${{ inputs.deployment_target }}" \
-            --deployment-action "${{ inputs.deployment_action }}"
+            --repo-root .
       - name: Remove Git credential
         if: always()
         run: git remote set-url origin "https://github.kp.org/${GITHUB_REPOSITORY}.git" || true

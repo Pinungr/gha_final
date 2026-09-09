@@ -83,7 +83,7 @@ repository, Code Promotion continues to call the safe reusable
 `trigger_DBX_WF_management.yaml` stub. The separate DBX workflow design applies
 only to the organization templates.
 
-The initial promotion PR carries a signed machine-readable promotion marker.
+The initial promotion PR carries a machine-readable promotion marker.
 It must be reviewed and manually squash-merged before deployment continues.
 The PR author may perform that manual merge when repository rules allow it;
 GitHub does not permit authors to submit an Approve review on their own PR, so
@@ -103,8 +103,8 @@ The reusable components are:
 
 | Workflow | Purpose |
 | --- | --- |
-| `promotion_pr_approved.yml` | Validates the signed initial PR and waits for its mandatory manual squash merge. |
-| `promotion_initial_merged.yml` | Verifies the merged PR identity and exact merge SHA before deployment. |
+| `promotion_pr_approved.yml` | Waits for the mandatory manual squash merge while allowing application-team commits to the open staging branch. |
+| `promotion_initial_merged.yml` | Uses the final merge SHA and recalculates the DBX action from the files actually merged. |
 | `trigger_DBX_WF_management.yaml` | Personal-repository test stub: supports manual testing and reusable Code Promotion calls without changing external resources. |
 | `promotion_deployment_completed.yml` | Verifies the direct deployment result and exact branch/SHA, then reports whether validation is required. |
 | `promotion_deployment_validation.yml` | Uses the configured GitHub Environment required-reviewer gate for PSUP/PROD. |
@@ -118,8 +118,8 @@ For organization use, copy the corresponding file from
 remains manually dispatched, continues to offer `uat`, `psup`, and `prod`, and
 passes `github.ref` unchanged. Code Promotion instead calls the automation-owned
 `code_promotion_dbx_management.yml`, which preserves the org DevSecOps,
-ServiceNow, DBX, and SCTASK job flow while accepting the authenticated
-deployment branch and SHA as reusable-workflow inputs. MASTER maps to the
+ServiceNow, DBX, and SCTASK job flow while accepting the merged deployment
+branch and SHA as reusable-workflow inputs. MASTER maps to the
 organization's existing `uat` DBX environment.
 
 Create the GitHub Environment `ReleaseApproval` and configure its required
@@ -137,18 +137,19 @@ GitHub-hosted job limit. On GitHub Enterprise Server or self-hosted runners,
 verify the supported maximum job duration before increasing
 `approval_timeout_hours` or the final-PR polling deadline.
 
-Set repository secret `PROMOTION_LIFECYCLE_HMAC_KEY` to a random value of at
-least 32 characters.
-The initial workflow signs its metadata with this secret; continuation workflows
-fail closed for unsigned or forged PR markers. Set repository secret
-`REPO_TOKEN` to a fine-grained token for this repository with Contents,
+The organization trust model treats the manual initial PR merge as approval.
+Application teams may add commits to the staging branch while that PR is open;
+the workflow deploys the resulting GitHub merge commit and recalculates
+`create/update_repo` versus `create/update_workflow` from the final PR file list.
+No lifecycle HMAC secret is required. Set repository secret `REPO_TOKEN` to a
+fine-grained token for this repository with Contents,
 Pull requests, Issues, and Workflows set to read and write (Metadata remains
 read-only). A classic token needs `repo` and, when workflow files can be
-promoted, `workflow`. The workflow checks both secrets and token access before
+promoted, `workflow`. The workflow checks the token and repository access before
 it can push a promotion branch. The token is used for protected merges and PR
 comments. If PSUP/PROD branch rules prevent the final
 synchronization PR from merging, grant only that automation identity a narrowly
-scoped bypass for PRs carrying the signed final marker; do not grant that bypass
+scoped bypass for PRs carrying the managed final marker; do not grant that bypass
 to the initial promotion PR.
 
 Code Promotion deployment uses environment-based concurrency

@@ -10,8 +10,6 @@ protected application branch.
 from __future__ import annotations
 
 import argparse
-import hmac
-import hashlib
 import json
 import os
 import re
@@ -74,7 +72,6 @@ class PromotionMetadata:
     initial_pr_base: str
     base_sha: str
     promotion_run_url: str | None = None
-    signature: str = ""
 
 
 @dataclass(frozen=True)
@@ -117,25 +114,6 @@ def metadata_comment(metadata: PromotionMetadata) -> str:
     return f"<!-- dbx-promotion-metadata: {json.dumps(asdict(metadata), sort_keys=True)} -->"
 
 
-def sign_metadata(metadata: PromotionMetadata, secret: str) -> PromotionMetadata:
-    """Attach a stable HMAC so ordinary PR authors cannot forge managed metadata."""
-    if not secret:
-        return metadata
-    payload = asdict(metadata)
-    payload["signature"] = ""
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    signature = hmac.new(secret.encode(), encoded, hashlib.sha256).hexdigest()
-    return PromotionMetadata(**{**payload, "signature": signature})
-
-
-def metadata_is_authenticated(metadata: PromotionMetadata, secret: str) -> bool:
-    if not secret or not metadata.signature:
-        return False
-    return hmac.compare_digest(sign_metadata(
-        PromotionMetadata(**{**asdict(metadata), "signature": ""}), secret
-    ).signature, metadata.signature)
-
-
 def state_comment(record: LifecycleRecord) -> str:
     payload = {"promotion_id": record.promotion_id, "state": record.state.value,
                "recorded_at": record.recorded_at, "data": record.data}
@@ -150,6 +128,10 @@ def parse_metadata(body: str) -> PromotionMetadata | None:
         return None
     try:
         raw = json.loads(match.group("json"))
+        # Accept PRs created by the previous signed-metadata implementation.
+        # The organization trust model now relies on the manual merge, so a
+        # legacy signature is ignored rather than verified.
+        raw.pop("signature", None)
         metadata = PromotionMetadata(**raw)
     except (TypeError, ValueError, json.JSONDecodeError):
         return None
@@ -164,7 +146,9 @@ def parse_final_metadata(body: str) -> PromotionMetadata | None:
     if not match:
         return None
     try:
-        metadata = PromotionMetadata(**json.loads(match.group("json")))
+        raw = json.loads(match.group("json"))
+        raw.pop("signature", None)
+        metadata = PromotionMetadata(**raw)
     except (TypeError, ValueError, json.JSONDecodeError):
         return None
     return metadata if _PROMOTION_ID_RE.fullmatch(metadata.promotion_id) else None
@@ -240,12 +224,7 @@ def _repo() -> str:
 
 
 def _metadata_from_pr(pr: dict[str, Any]) -> PromotionMetadata | None:
-    metadata = parse_metadata(str(pr.get("body") or ""))
-    if not metadata or not metadata_is_authenticated(
-        metadata, os.environ.get("PROMOTION_LIFECYCLE_HMAC_KEY", "")
-    ):
-        return None
-    return metadata
+    return parse_metadata(str(pr.get("body") or ""))
 
 
 def _latest_record(comments: list[dict[str, Any]], promotion_id: str) -> LifecycleRecord | None:
@@ -285,7 +264,7 @@ def _managed_pr(client: GhClient, promotion_id: str, number: int) -> tuple[Promo
         raise RuntimeError("Pull Request could not be loaded by its expected number")
     metadata = _metadata_from_pr(pr)
     if not metadata or metadata.promotion_id != promotion_id:
-        raise RuntimeError("Pull Request is not the authenticated managed promotion")
+        raise RuntimeError("Pull Request is not the expected managed promotion")
     return metadata, pr
 
 
@@ -294,7 +273,6 @@ def _assert_initial_identity(
     pr: dict[str, Any],
     staging_branch: str,
     initial_pr_base: str,
-    expected_head_sha: str,
 ) -> None:
     if (
         metadata.staging_branch != staging_branch
@@ -303,8 +281,6 @@ def _assert_initial_identity(
         or str((pr.get("base") or {}).get("ref") or "") != initial_pr_base
     ):
         raise RuntimeError("initial Pull Request branch identity changed unexpectedly")
-    if str((pr.get("head") or {}).get("sha") or "").lower() != _require_sha(expected_head_sha, "initial PR head SHA"):
-        raise RuntimeError("initial Pull Request head SHA changed unexpectedly")
 
 
 def _branch_sha(client: GhClient, branch: str) -> str:
@@ -316,13 +292,17 @@ def advance_initial_pr(
     client: GhClient,
     promotion_id: str,
     number: int,
-    expected_head_sha: str,
     staging_branch: str,
     initial_pr_base: str,
 ) -> InitialPrProgress:
-    """Wait for a manual merge and report the authenticated merge state."""
+    """Wait for a manual merge and report its final merge commit.
+
+    The staging branch may receive application-team commits while the PR is
+    open. The manual merge is the approval boundary, so no pre-merge head SHA
+    is frozen here.
+    """
     metadata, pr = _managed_pr(client, promotion_id, number)
-    _assert_initial_identity(metadata, pr, staging_branch, initial_pr_base, expected_head_sha)
+    _assert_initial_identity(metadata, pr, staging_branch, initial_pr_base)
     if pr.get("merged"):
         _record_once(
             client,
@@ -349,8 +329,8 @@ def verify_initial_merge(
     merged_sha: str,
     deployment_branch: str,
     deployment_target: str,
-    deployment_action: str,
-) -> None:
+    cfg_path: Path,
+) -> str:
     metadata, pr = _managed_pr(client, promotion_id, number)
     expected_sha = _require_sha(merged_sha, "merged initial PR SHA")
     current = _latest_record(_comments(client, number), promotion_id)
@@ -359,11 +339,18 @@ def verify_initial_merge(
         or _require_sha(str(pr.get("merge_commit_sha") or ""), "merged initial PR SHA") != expected_sha
         or metadata.target != deployment_target
         or metadata.deployment_branch != deployment_branch
-        or metadata.deployment_action != deployment_action
         or not current
         or current.state not in {LifecycleState.INITIAL_PR_APPROVED, LifecycleState.INITIAL_PR_MERGED}
     ):
-        raise RuntimeError("initial Pull Request merge does not match the trusted promotion inputs")
+        raise RuntimeError("initial Pull Request merge does not match the promotion inputs")
+    cfg = config_mod.load(cfg_path)
+    files = client.api_all(f"repos/{_repo()}/pulls/{number}/files?per_page=100")
+    has_workflow_changes = any(
+        cfg.is_workflow_path(str(file.get("filename") or ""))
+        or cfg.is_workflow_path(str(file.get("previous_filename") or ""))
+        for file in files
+    )
+    deployment_action = deployment_action_for(has_workflow_changes)
     _record_once(
         client,
         number,
@@ -371,7 +358,9 @@ def verify_initial_merge(
         LifecycleState.INITIAL_PR_MERGED,
         deployment_branch=deployment_branch,
         deployment_sha=expected_sha,
+        deployment_action=deployment_action,
     )
+    return deployment_action
 
 
 def verify_deployment_branch(client: GhClient, deployment_branch: str, deployment_sha: str) -> None:
@@ -403,7 +392,7 @@ def record_deployment_completed(
         or str(actual_result).lower() != "success"
         or _require_sha(actual_sha, "actual deployed SHA") != expected_sha
     ):
-        raise RuntimeError("deployment result does not match the authenticated promotion")
+        raise RuntimeError("deployment result does not match the merged promotion")
     verify_deployment_branch(client, deployment_branch, expected_sha)
     _record_once(
         client,
@@ -439,7 +428,7 @@ def begin_validation(
         or metadata.deployment_branch != deployment_branch
         or config_mod.load(cfg_path).validation_environment(deployment_target) != validation_environment
     ):
-        raise RuntimeError("validation inputs do not match the authenticated promotion")
+        raise RuntimeError("validation inputs do not match the merged promotion")
     current = _latest_record(_comments(client, number), promotion_id)
     if current and current.state == LifecycleState.WAITING_FOR_VALIDATION:
         if str(current.data.get("deployment_sha") or "").lower() != deployed_sha:
@@ -482,7 +471,7 @@ def approve_validation(
         or current.state != LifecycleState.WAITING_FOR_VALIDATION
         or str(current.data.get("deployment_sha") or "").lower() != deployed_sha
     ):
-        raise RuntimeError("Environment validation does not match the authenticated deployment")
+        raise RuntimeError("Environment validation does not match the recorded deployment")
     verify_deployment_branch(client, deployment_branch, deployed_sha)
     _record_once(client, number, promotion_id, LifecycleState.VALIDATION_APPROVED, deployment_sha=deployed_sha)
 
@@ -505,7 +494,7 @@ def advance_final_pr(
         or not current
         or current.state not in {LifecycleState.VALIDATION_APPROVED, LifecycleState.FINAL_PR_CREATED}
     ):
-        raise RuntimeError("finalization does not follow an approved authenticated validation")
+        raise RuntimeError("finalization does not follow an approved validation")
     verify_deployment_branch(client, release_branch, deployed_sha)
     existing = client.command(
         "pr", "list", "--repo", _repo(), "--head", release_branch, "--base", deployment_target,
@@ -587,7 +576,7 @@ def prepare_rollback(
         or metadata.target != deployment_target
         or metadata.release_branch != release_branch
     ):
-        raise RuntimeError("rollback request does not match a rejected authenticated validation")
+        raise RuntimeError("rollback request does not match a rejected validation")
     _require_sha(deployed_sha, "deployed SHA")
     rollback_branch = config_mod.load(cfg_path).resolve(deployment_target).target
     rollback_sha = _branch_sha(client, rollback_branch)
@@ -628,7 +617,9 @@ def _main(argv: list[str] | None = None) -> int:
     wait = sub.add_parser("initial-pr-progress")
     wait.add_argument("--promotion-id", required=True)
     wait.add_argument("--initial-pr-number", required=True, type=int)
-    wait.add_argument("--initial-pr-head-sha", required=True)
+    # Accepted but intentionally ignored so runs started from an older workflow
+    # revision can finish after this redesign reaches master.
+    wait.add_argument("--initial-pr-head-sha", help=argparse.SUPPRESS)
     wait.add_argument("--staging-branch", required=True)
     wait.add_argument("--initial-pr-base", required=True)
 
@@ -638,7 +629,10 @@ def _main(argv: list[str] | None = None) -> int:
     merged.add_argument("--merged-sha", required=True)
     merged.add_argument("--deployment-branch", required=True)
     merged.add_argument("--deployment-target", required=True)
-    merged.add_argument("--deployment-action", required=True)
+    # The action is now recalculated from the final PR files. Retain the old
+    # argument as a no-op for in-flight workflow compatibility.
+    merged.add_argument("--deployment-action", help=argparse.SUPPRESS)
+    merged.add_argument("--repo-root", default=".")
 
     branch = sub.add_parser("verify-deployment-branch")
     branch.add_argument("--deployment-branch", required=True)
@@ -689,13 +683,13 @@ def _main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     client = GhCli(_repo())
     if args.command == "initial-pr-progress":
-        result = advance_initial_pr(client, args.promotion_id, args.initial_pr_number, args.initial_pr_head_sha, args.staging_branch, args.initial_pr_base)
+        result = advance_initial_pr(client, args.promotion_id, args.initial_pr_number, args.staging_branch, args.initial_pr_base)
         _write_outputs(approval_result=result.result, merged_sha=result.merged_sha, merged_branch=result.merged_branch)
         print(result.result)
         return 0 if result.result == "merged" else 3
     if args.command == "verify-initial-merge":
-        verify_initial_merge(client, args.promotion_id, args.initial_pr_number, args.merged_sha, args.deployment_branch, args.deployment_target, args.deployment_action)
-        _write_outputs(deployment_branch=args.deployment_branch, deployment_sha=args.merged_sha, deployment_target=args.deployment_target, deployment_action=args.deployment_action)
+        deployment_action = verify_initial_merge(client, args.promotion_id, args.initial_pr_number, args.merged_sha, args.deployment_branch, args.deployment_target, Path(args.repo_root))
+        _write_outputs(deployment_branch=args.deployment_branch, deployment_sha=args.merged_sha, deployment_target=args.deployment_target, deployment_action=deployment_action)
     elif args.command == "verify-deployment-branch":
         verify_deployment_branch(client, args.deployment_branch, args.deployment_sha)
         _write_outputs(deployment_branch=args.deployment_branch, deployed_sha=args.deployment_sha)

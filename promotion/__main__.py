@@ -61,7 +61,6 @@ def _set_outputs(result: PromotionResult) -> None:
         ("initial_pr_base", deployment_branch),
         ("initial_pr_number", pr_number),
         ("initial_pr_url", result.pr_url),
-        ("initial_pr_head_sha", result.commit_sha or ""),
         ("timestamp", result.timestamp),
         ("base_sha", result.base_sha),
         ("temporary_branch", result.staging_branch),
@@ -183,7 +182,6 @@ def main(argv: list[str] | None = None) -> int:
             release_description=description,
             run_url=_run_url(),
             correlation_id=_env("GITHUB_RUN_ID"),
-            lifecycle_secret=os.environ.get("PROMOTION_LIFECYCLE_HMAC_KEY", ""),
             dry_run=args.dry_run,
             log=lambda message: print(message, flush=True),
         )

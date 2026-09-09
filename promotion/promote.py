@@ -34,7 +34,6 @@ from .lifecycle import (
     PromotionMetadata,
     deployment_action_for,
     make_promotion_id,
-    sign_metadata,
 )
 from .pr import GhCliBackend, PullRequest, RecordingBackend, render_body, render_title
 from .psup_prod import guards as psup_prod_guards
@@ -163,7 +162,6 @@ def promote(
     now: datetime | None = None,
     run_url: str | None = None,
     correlation_id: str | None = None,
-    lifecycle_secret: str = "",
     dry_run: bool = False,
     log: Callable[[str], None] = lambda _msg: None,
 ) -> PromotionResult:
@@ -396,7 +394,7 @@ def promote(
             additional_staging_changes=additional_staging_changes,
             release_description=release_description,
             run_url=run_url,
-            lifecycle_metadata=sign_metadata(PromotionMetadata(
+            lifecycle_metadata=PromotionMetadata(
                 promotion_id=promotion_id,
                 target=env.name,
                 staging_branch=staging_branch,
@@ -407,7 +405,7 @@ def promote(
                 initial_pr_base=pr_base,
                 base_sha=base_sha,
                 promotion_run_url=run_url,
-            ), lifecycle_secret),
+            ),
         ),
         base=pr_base,
         head=staging_branch,

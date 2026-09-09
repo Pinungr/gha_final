@@ -52,7 +52,6 @@ jobs:
       - name: Record post-deployment validation request
         env:
           GH_TOKEN: ${{ secrets.REPO_TOKEN }}
-          PROMOTION_LIFECYCLE_HMAC_KEY: ${{ secrets.PROMOTION_LIFECYCLE_HMAC_KEY }}
         run: |
           python -m promotion.lifecycle validation-started \
             --promotion-id "${{ inputs.promotion_id }}" \
@@ -98,7 +97,6 @@ jobs:
         name: Verify approved environment validation
         env:
           GH_TOKEN: ${{ secrets.REPO_TOKEN }}
-          PROMOTION_LIFECYCLE_HMAC_KEY: ${{ secrets.PROMOTION_LIFECYCLE_HMAC_KEY }}
         run: |
           python -m promotion.lifecycle validation-approved \
             --promotion-id "${{ inputs.promotion_id }}" \

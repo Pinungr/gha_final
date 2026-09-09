@@ -19,11 +19,9 @@ from promotion.lifecycle import (
     begin_validation,
     deployment_action_for,
     metadata_comment,
-    metadata_is_authenticated,
     parse_metadata,
     prepare_rollback,
     record_deployment_completed,
-    sign_metadata,
     state_comment,
     verify_deployment_branch,
     verify_initial_merge,
@@ -42,6 +40,7 @@ class FakeGh:
         self.commands: list[tuple[str, ...]] = []
         self.comments: list[dict[str, str]] = []
         self.refs = {"release/test_psup": SHA, "psup": ROLLBACK_SHA, "master": SHA}
+        self.pr_files: list[dict[str, str]] = [{"filename": "workflows/example.json"}]
         self.final_prs: list[dict[str, str]] = []
         self.final_view: dict = {}
         self.created_final_url = "https://example.invalid/owner/repo/pull/99"
@@ -67,6 +66,11 @@ class FakeGh:
             return {"object": {"sha": self.refs.get(branch, SHA)}}
         if "/pulls/" in endpoint_path:
             return self.pr
+        raise AssertionError(endpoint)
+
+    def api_all(self, endpoint: str) -> list[dict[str, str]]:
+        if endpoint.split("?", 1)[0].endswith("/files"):
+            return self.pr_files
         raise AssertionError(endpoint)
 
     def command(self, *args: str) -> str:
@@ -105,7 +109,7 @@ def _pr(metadata: PromotionMetadata | None = None, *, merged: bool = False) -> d
     metadata = metadata or _metadata()
     return {
         "number": 41,
-        "body": f"{MANAGED_MARKER}\n{metadata_comment(sign_metadata(metadata, 'secret'))}",
+        "body": f"{MANAGED_MARKER}\n{metadata_comment(metadata)}",
         "merged": merged,
         "merge_commit_sha": SHA if merged else None,
         "state": "closed" if merged else "open",
@@ -153,7 +157,6 @@ def _state(state: LifecycleState, data: dict | None = None) -> dict[str, str]:
 
 def _setup(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
-    monkeypatch.setenv("PROMOTION_LIFECYCLE_HMAC_KEY", "secret")
 
 
 def test_workflow_change_action_selection() -> None:
@@ -161,19 +164,25 @@ def test_workflow_change_action_selection() -> None:
     assert deployment_action_for(False) == "create/update_repo"
 
 
-def test_signed_metadata_cannot_be_forged() -> None:
-    signed = sign_metadata(_metadata(), "secret")
-    parsed = parse_metadata(f"{MANAGED_MARKER}\n{metadata_comment(signed)}")
+def test_unsigned_metadata_is_accepted() -> None:
+    parsed = parse_metadata(f"{MANAGED_MARKER}\n{metadata_comment(_metadata())}")
     assert parsed is not None
-    assert metadata_is_authenticated(parsed, "secret")
-    assert not metadata_is_authenticated(parsed, "different-secret")
+    assert parsed.promotion_id == "run-123"
+
+
+def test_legacy_signature_field_is_ignored() -> None:
+    payload = {**_metadata().__dict__, "signature": "legacy-signature"}
+    body = f"{MANAGED_MARKER}\n<!-- dbx-promotion-metadata: {json.dumps(payload)} -->"
+    parsed = parse_metadata(body)
+    assert parsed is not None
+    assert parsed.promotion_id == "run-123"
 
 
 def test_initial_pr_waits_for_mandatory_manual_merge(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     _setup(monkeypatch)
     gh = FakeGh(_pr(), [])
 
-    result = advance_initial_pr(gh, "run-123", 41, "b" * 40, "staging/test", "release/test_psup")
+    result = advance_initial_pr(gh, "run-123", 41, "staging/test", "release/test_psup")
 
     assert result.result == "waiting"
     assert gh.commands == []
@@ -184,8 +193,8 @@ def test_initial_pr_never_auto_merges_even_with_review(monkeypatch) -> None:  # 
     _setup(monkeypatch)
     gh = FakeGh(_pr(), [{"state": "APPROVED", "user": {"login": "reviewer"}}])
 
-    first = advance_initial_pr(gh, "run-123", 41, "b" * 40, "staging/test", "release/test_psup")
-    second = advance_initial_pr(gh, "run-123", 41, "b" * 40, "staging/test", "release/test_psup")
+    first = advance_initial_pr(gh, "run-123", 41, "staging/test", "release/test_psup")
+    second = advance_initial_pr(gh, "run-123", 41, "staging/test", "release/test_psup")
 
     assert first.result == second.result == "waiting"
     assert gh.commands == []
@@ -196,7 +205,7 @@ def test_initial_pr_reports_actual_merge(monkeypatch) -> None:  # type: ignore[n
     _setup(monkeypatch)
     gh = FakeGh(_pr(merged=True), [])
 
-    result = advance_initial_pr(gh, "run-123", 41, "b" * 40, "staging/test", "release/test_psup")
+    result = advance_initial_pr(gh, "run-123", 41, "staging/test", "release/test_psup")
 
     assert result.result == "merged"
     assert result.merged_sha == SHA
@@ -205,12 +214,15 @@ def test_initial_pr_reports_actual_merge(monkeypatch) -> None:  # type: ignore[n
     assert '"approval_method": "manual_merge"' in gh.comments[-1]["body"]
 
 
-def test_changed_initial_pr_sha_blocks_progress(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_changed_staging_head_is_allowed_before_manual_merge(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     _setup(monkeypatch)
-    gh = FakeGh(_pr(), [])
+    pr = _pr()
+    pr["head"]["sha"] = OTHER_SHA
+    gh = FakeGh(pr, [])
 
-    with pytest.raises(RuntimeError, match="head SHA changed"):
-        advance_initial_pr(gh, "run-123", 41, OTHER_SHA, "staging/test", "release/test_psup")
+    result = advance_initial_pr(gh, "run-123", 41, "staging/test", "release/test_psup")
+
+    assert result.result == "waiting"
 
 
 def test_closed_initial_pr_without_merge_fails(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -220,26 +232,57 @@ def test_closed_initial_pr_without_merge_fails(monkeypatch) -> None:  # type: ig
     gh = FakeGh(pr)
 
     with pytest.raises(RuntimeError, match="closed without merging"):
-        advance_initial_pr(gh, "run-123", 41, "b" * 40, "staging/test", "release/test_psup")
+        advance_initial_pr(gh, "run-123", 41, "staging/test", "release/test_psup")
 
 
-def test_initial_merge_verification_requires_trusted_merge(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_initial_merge_recalculates_workflow_deployment_action(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     _setup(monkeypatch)
     gh = FakeGh(_pr(merged=True))
     gh.comments = [_state(LifecycleState.INITIAL_PR_APPROVED)]
 
-    verify_initial_merge(gh, "run-123", 41, SHA, "release/test_psup", "PSUP", "create/update_workflow")
+    action = verify_initial_merge(
+        gh, "run-123", 41, SHA, "release/test_psup", "PSUP", _config(tmp_path)
+    )
 
+    assert action == "create/update_workflow"
     assert "INITIAL_PR_MERGED" in gh.comments[-1]["body"]
 
 
-def test_initial_merge_sha_mismatch_fails(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_initial_merge_recalculates_repo_deployment_action(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    _setup(monkeypatch)
+    gh = FakeGh(_pr(merged=True))
+    gh.pr_files = [{"filename": "Notebooks/application.py"}]
+    gh.comments = [_state(LifecycleState.INITIAL_PR_APPROVED)]
+
+    action = verify_initial_merge(
+        gh, "run-123", 41, SHA, "release/test_psup", "PSUP", _config(tmp_path)
+    )
+
+    assert action == "create/update_repo"
+
+
+def test_workflow_rename_in_final_pr_selects_workflow_action(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    _setup(monkeypatch)
+    gh = FakeGh(_pr(merged=True))
+    gh.pr_files = [{"filename": "Notebooks/renamed.json", "previous_filename": "workflows/job.json"}]
+    gh.comments = [_state(LifecycleState.INITIAL_PR_APPROVED)]
+
+    action = verify_initial_merge(
+        gh, "run-123", 41, SHA, "release/test_psup", "PSUP", _config(tmp_path)
+    )
+
+    assert action == "create/update_workflow"
+
+
+def test_initial_merge_sha_mismatch_fails(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     _setup(monkeypatch)
     gh = FakeGh(_pr(merged=True))
     gh.comments = [_state(LifecycleState.INITIAL_PR_APPROVED)]
 
     with pytest.raises(RuntimeError, match="merge does not match"):
-        verify_initial_merge(gh, "run-123", 41, OTHER_SHA, "release/test_psup", "PSUP", "create/update_workflow")
+        verify_initial_merge(
+            gh, "run-123", 41, OTHER_SHA, "release/test_psup", "PSUP", _config(tmp_path)
+        )
 
 
 def test_deployment_branch_is_checked_before_use(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -415,7 +458,7 @@ def test_reusable_workflow_interfaces_and_parent_graph() -> None:
     assert parent.count("secrets: inherit") == 7
     expected_outputs = {
         "promotion_pr_approved.yml": ("merged_sha", "merged_branch", "approval_result"),
-        "promotion_initial_merged.yml": ("deployment_sha", "deployment_branch"),
+        "promotion_initial_merged.yml": ("deployment_sha", "deployment_branch", "deployment_action"),
         "trigger_DBX_WF_management.yaml": ("deployment_result", "deployed_sha", "deployment_branch"),
         "promotion_deployment_completed.yml": ("deployment_verified", "requires_validation", "validation_environment"),
         "promotion_deployment_validation.yml": ("validation_result", "validated_sha"),
@@ -461,8 +504,9 @@ def test_enterprise_templates_match_reusable_contract() -> None:
         template_dir / "promotion_deployment_validation.yml"
     ).read_text(encoding="utf-8")
     assert parent.count("secrets: inherit") == 7
-    assert "Validate required automation secrets" in parent
+    assert "Validate repository token" in parent
     assert "GH_ENTERPRISE_TOKEN=\"$REPO_TOKEN\" gh api --hostname github.kp.org" in parent
+    assert "PROMOTION_LIFECYCLE_HMAC_KEY" not in parent
 
 
 def test_deployment_uses_same_environment_concurrency() -> None:
@@ -476,15 +520,14 @@ def test_deployment_uses_same_environment_concurrency() -> None:
     assert "execute_dbx_wf_management.yml" not in text
 
 
-def test_code_promotion_fails_before_mutation_when_required_secrets_are_missing() -> None:
+def test_code_promotion_fails_before_mutation_when_repo_token_is_missing() -> None:
     parent = Path(".github/workflows/code_promotion.yml").read_text(encoding="utf-8")
-    preflight = parent.index("- name: Validate required automation secrets")
+    preflight = parent.index("- name: Validate repository token")
     checkout = parent.index("- name: Check out trusted promotion automation")
     promote = parent.index("name: Prepare promotion and open initial Pull Request")
     assert preflight < checkout < promote
     assert "title=Missing REPO_TOKEN" in parent
-    assert "title=Missing PROMOTION_LIFECYCLE_HMAC_KEY" in parent
-    assert "${#PROMOTION_LIFECYCLE_HMAC_KEY} -lt 32" in parent
+    assert "PROMOTION_LIFECYCLE_HMAC_KEY" not in parent
     assert "GH_TOKEN=\"$REPO_TOKEN\" gh api \"repos/${GITHUB_REPOSITORY}\"" in parent
 
 

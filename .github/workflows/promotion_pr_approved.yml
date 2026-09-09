@@ -9,9 +9,6 @@ on:
       initial_pr_number:
         required: true
         type: string
-      initial_pr_head_sha:
-        required: true
-        type: string
       staging_branch:
         required: true
         type: string
@@ -66,7 +63,6 @@ jobs:
         name: Wait for mandatory manual merge
         env:
           GH_TOKEN: ${{ secrets.REPO_TOKEN }}
-          PROMOTION_LIFECYCLE_HMAC_KEY: ${{ secrets.PROMOTION_LIFECYCLE_HMAC_KEY }}
           APPROVAL_TIMEOUT_HOURS: ${{ inputs.approval_timeout_hours }}
         run: |
           if ! [[ "$APPROVAL_TIMEOUT_HOURS" =~ ^[1-5]$ ]]; then
@@ -79,7 +75,6 @@ jobs:
             python -m promotion.lifecycle initial-pr-progress \
               --promotion-id "${{ inputs.promotion_id }}" \
               --initial-pr-number "${{ inputs.initial_pr_number }}" \
-              --initial-pr-head-sha "${{ inputs.initial_pr_head_sha }}" \
               --staging-branch "${{ inputs.staging_branch }}" \
               --initial-pr-base "${{ inputs.initial_pr_base }}"
             status=$?
