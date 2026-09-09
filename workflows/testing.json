@@ -1,5 +1,6 @@
 {
-  "test": "code-promotion-e2e",
+  "test": "code-promotion-manual-approval-e2e",
   "target": "PSUP",
-  "date": "2026-09-09"
+  "date": "2026-09-09",
+  "approval": "mandatory-manual-merge"
 }
