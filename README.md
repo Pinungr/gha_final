@@ -84,15 +84,17 @@ repository, Code Promotion continues to call the safe reusable
 only to the organization templates.
 
 The initial promotion PR carries a signed machine-readable promotion marker.
-The parent requests normal non-admin squash auto-merge immediately and waits
-until GitHub reports the PR actually merged. The automation does not require a
-separate PR review itself, never approves a PR, and never bypasses repository
-branch protection; any review requirement configured in GitHub still applies.
+It must be reviewed and manually squash-merged before deployment continues.
+The PR author may perform that manual merge when repository rules allow it;
+GitHub does not permit authors to submit an Approve review on their own PR, so
+the successful manual merge is the recorded approval event. The automation
+never approves or auto-merges this initial PR and never bypasses repository
+branch protection.
 
 The parent then calls the lifecycle components in this order:
 
 ```text
-prepare → initial PR auto-merge/merge → merge verification → deployment
+prepare → mandatory manual initial PR merge → merge verification → deployment
 → deployment verification → Environment validation (PSUP/PROD)
 → final PR creation/merge (PSUP/PROD) → summary
 ```
@@ -101,7 +103,7 @@ The reusable components are:
 
 | Workflow | Purpose |
 | --- | --- |
-| `promotion_pr_approved.yml` | Validates the signed initial PR, requests normal auto-merge, and waits for the actual merge. |
+| `promotion_pr_approved.yml` | Validates the signed initial PR and waits for its mandatory manual squash merge. |
 | `promotion_initial_merged.yml` | Verifies the merged PR identity and exact merge SHA before deployment. |
 | `trigger_DBX_WF_management.yaml` | Personal-repository test stub: supports manual testing and reusable Code Promotion calls without changing external resources. |
 | `promotion_deployment_completed.yml` | Verifies the direct deployment result and exact branch/SHA, then reports whether validation is required. |

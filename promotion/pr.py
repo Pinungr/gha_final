@@ -225,9 +225,9 @@ def render_body(
         "---",
         "",
         f"The source-of-truth branches (`{source_branch}`, `{target_branch}`) were "
-        "not modified while the Pull Request is being prepared. The workflow requests "
-        f"normal auto-merge to publish the change to `{destination}`; repository "
-        "protection remains authoritative.",
+        "not modified while the Pull Request is being prepared. Review and manually "
+        f"squash-merge this Pull Request to publish the change to `{destination}`. "
+        "The author may perform the merge when repository protection permits.",
     ]
     lines += [
         "",
@@ -236,7 +236,7 @@ def render_body(
         f"- Promotion ID: `{lifecycle_metadata.promotion_id}`",
         f"- Workflow changes: `{'YES' if lifecycle_metadata.has_workflow_changes else 'NO'}`",
         f"- Deployment action: `{lifecycle_metadata.deployment_action}`",
-        "- Status: `WAITING_FOR_PR_MERGE`",
+        "- Status: `WAITING_FOR_PR_APPROVAL`",
         "",
         MANAGED_MARKER,
         metadata_comment(lifecycle_metadata),

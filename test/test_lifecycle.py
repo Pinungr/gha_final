@@ -169,43 +169,40 @@ def test_signed_metadata_cannot_be_forged() -> None:
     assert not metadata_is_authenticated(parsed, "different-secret")
 
 
-def test_initial_pr_requests_merge_without_review(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_initial_pr_waits_for_mandatory_manual_merge(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     _setup(monkeypatch)
     gh = FakeGh(_pr(), [])
 
     result = advance_initial_pr(gh, "run-123", 41, "b" * 40, "staging/test", "release/test_psup")
 
     assert result.result == "waiting"
-    merges = [command for command in gh.commands if command[:2] == ("pr", "merge")]
-    assert len(merges) == 1
-    assert "--admin" not in merges[0]
-    assert "INITIAL_PR_APPROVED" in gh.comments[-1]["body"]
+    assert gh.commands == []
+    assert "WAITING_FOR_PR_APPROVAL" in gh.comments[-1]["body"]
 
 
-def test_initial_pr_requests_normal_auto_merge_once(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_initial_pr_never_auto_merges_even_with_review(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     _setup(monkeypatch)
-    gh = FakeGh(_pr(), [])
+    gh = FakeGh(_pr(), [{"state": "APPROVED", "user": {"login": "reviewer"}}])
 
     first = advance_initial_pr(gh, "run-123", 41, "b" * 40, "staging/test", "release/test_psup")
     second = advance_initial_pr(gh, "run-123", 41, "b" * 40, "staging/test", "release/test_psup")
 
     assert first.result == second.result == "waiting"
-    merges = [command for command in gh.commands if command[:2] == ("pr", "merge")]
-    assert len(merges) == 1
-    assert "--admin" not in merges[0]
-    assert "--match-head-commit" in merges[0]
+    assert gh.commands == []
+    assert len(gh.comments) == 1
 
 
 def test_initial_pr_reports_actual_merge(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     _setup(monkeypatch)
     gh = FakeGh(_pr(merged=True), [])
-    gh.comments = [_state(LifecycleState.INITIAL_PR_APPROVED)]
 
     result = advance_initial_pr(gh, "run-123", 41, "b" * 40, "staging/test", "release/test_psup")
 
     assert result.result == "merged"
     assert result.merged_sha == SHA
     assert result.merged_branch == "release/test_psup"
+    assert "INITIAL_PR_APPROVED" in gh.comments[-1]["body"]
+    assert '"approval_method": "manual_merge"' in gh.comments[-1]["body"]
 
 
 def test_changed_initial_pr_sha_blocks_progress(monkeypatch) -> None:  # type: ignore[no-untyped-def]

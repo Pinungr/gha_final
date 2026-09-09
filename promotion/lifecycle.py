@@ -320,10 +320,17 @@ def advance_initial_pr(
     staging_branch: str,
     initial_pr_base: str,
 ) -> InitialPrProgress:
-    """Request normal auto-merge and report the actual merge state."""
+    """Wait for a manual merge and report the authenticated merge state."""
     metadata, pr = _managed_pr(client, promotion_id, number)
     _assert_initial_identity(metadata, pr, staging_branch, initial_pr_base, expected_head_sha)
     if pr.get("merged"):
+        _record_once(
+            client,
+            number,
+            promotion_id,
+            LifecycleState.INITIAL_PR_APPROVED,
+            approval_method="manual_merge",
+        )
         return InitialPrProgress(
             "merged",
             _require_sha(str(pr.get("merge_commit_sha") or ""), "merged initial PR SHA"),
@@ -331,14 +338,7 @@ def advance_initial_pr(
         )
     if str(pr.get("state") or "open").lower() != "open" or pr.get("draft"):
         raise RuntimeError("initial Pull Request was closed without merging or is still a draft")
-    current = _latest_record(_comments(client, number), promotion_id)
-    if not current or current.state != LifecycleState.INITIAL_PR_APPROVED:
-        _record(client, number, promotion_id, LifecycleState.INITIAL_PR_APPROVED)
-        # No --admin and no branch deletion: repository protection remains authoritative.
-        client.command(
-            "pr", "merge", str(number), "--repo", _repo(), "--squash", "--auto",
-            "--match-head-commit", _require_sha(expected_head_sha, "initial PR head SHA"),
-        )
+    _record_once(client, number, promotion_id, LifecycleState.WAITING_FOR_PR_APPROVAL)
     return InitialPrProgress("waiting")
 
 

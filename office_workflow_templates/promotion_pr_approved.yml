@@ -62,10 +62,10 @@ jobs:
         run: python --version
       - name: Explain merge wait
         run: |
-          echo "## Waiting for initial Pull Request" >> "$GITHUB_STEP_SUMMARY"
-          echo "Requesting normal auto-merge for [PR #${{ inputs.initial_pr_number }}](${{ github.server_url }}/${{ github.repository }}/pull/${{ inputs.initial_pr_number }}) and waiting for GitHub to merge it." >> "$GITHUB_STEP_SUMMARY"
+          echo "## Manual initial Pull Request approval required" >> "$GITHUB_STEP_SUMMARY"
+          echo "Review and manually squash-merge [PR #${{ inputs.initial_pr_number }}](${{ github.server_url }}/${{ github.repository }}/pull/${{ inputs.initial_pr_number }}). The PR author may merge it when repository rules permit." >> "$GITHUB_STEP_SUMMARY"
       - id: poll
-        name: Request normal auto-merge and wait for actual merge
+        name: Wait for mandatory manual merge
         env:
           GH_HOST: github.kp.org
           GH_TOKEN: ${{ secrets.REPO_TOKEN }}

@@ -109,7 +109,7 @@ def _summarise_success(result: PromotionResult) -> None:
         lines += [
             f"Pull Request: {result.pr_url}",
             "",
-            "The workflow will request normal squash auto-merge and wait for GitHub.",
+            "Review and manually squash-merge it; the workflow will wait for GitHub.",
         ]
     elif result.dry_run:
         lines.append("No branches were pushed and no Pull Request was created.")
